@@ -1,0 +1,17 @@
+Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc	2026-11-05 22:23:29.046013888 -0500
++++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc	2026-11-05 22:38:50.264247145 -0500
+@@ -36,8 +36,10 @@
+   registry->RegisterIntegerPref(prefs::kHeliumLayout,
+                                 std::to_underlying(HeliumLayoutType::kVertical));
+   registry->RegisterBooleanPref(prefs::kHeliumVerticalRightAligned, false);
+-  registry->RegisterBooleanPref(prefs::kHeliumZenMode, false);
+-  registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, false);
++  // Browse: minimal chrome by default. The sidebar stays pinned; the toolbar
++  // (address bar, extensions, menu) tucks away until you hover the top edge.
++  registry->RegisterBooleanPref(prefs::kHeliumZenMode, true);
++  registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, true);
+   registry->RegisterBooleanPref(prefs::kHeliumZenModeTopChromePinned, false);
+ }
+ 

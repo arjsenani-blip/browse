@@ -1,0 +1,272 @@
+Index: src/chrome/app/chromium_strings.grd
+===================================================================
+--- src.orig/chrome/app/chromium_strings.grd	2026-11-05 06:12:47.651902368 -0500
++++ src/chrome/app/chromium_strings.grd	2026-11-05 22:42:09.560785133 -0500
+@@ -1131,7 +1131,7 @@
+       </message>
+ 
+       <message name="IDS_APPMENU_TOOLTIP_HELIUM_SERVICES_UPDATE" desc="The tooltip to show for the browser menu when Helium services schema changes">
+-        Helium services have been updated. Please review the changes.
++        Browse services have been updated. Please review the changes.
+       </message>
+ 
+       <message name="IDS_APPMENU_TOOLTIP_ALERT" desc="The tooltip to show for the browser menu when a non-update alert is displayed">
+@@ -1923,7 +1923,7 @@
+ 
+       <!-- Helium services schema change bubble -->
+       <message name="IDS_HELIUM_SERVICES_SCHEMA_MENU_ITEM" desc="Text for the bubble that notifies the user of a schema change in Helium services.">
+-        Review Helium services updates
++        Review Browse services updates
+       </message>
+ 
+       <!-- User menu errors -->
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd	2026-11-05 06:13:58.382650291 -0500
++++ src/chrome/app/generated_resources.grd	2026-11-05 22:42:09.530424614 -0500
+@@ -3305,7 +3305,7 @@
+       </message>
+       <message name="IDS_DOWNLOAD_BUBBLE_INTERRUPTED_SUBPAGE_SUMMARY_HELIUM_SERVICES_DISABLED"
+                desc="Subpage summary text for a extension download item that was interrupted because Helium services are disabled.">
+-        Extension downloads are disabled. Enable this feature in Helium services settings and try again.
++        Extension downloads are disabled. Enable this feature in Browse services settings and try again.
+       </message>
+       <message name="IDS_DOWNLOAD_BUBBLE_INTERRUPTED_SUBPAGE_SUMMARY_PATH_TOO_LONG"
+                desc="Subpage summary text for a download item that was interrupted because the file path name is too long.">
+@@ -7026,7 +7026,7 @@
+         Update error
+       </message>
+       <message name="IDS_COMPONENTS_SVC_STATUS_ERROR_HELIUM_SERVICES" desc="Service Status">
+-        Component updates are disabled. See Helium services in settings.
++        Component updates are disabled. See Browse services in settings.
+       </message>
+       <message name="IDS_COMPONENTS_UNKNOWN" desc="Service Status">
+         Unknown
+@@ -11974,7 +11974,7 @@
+             Full Disk Access required
+           </message>
+           <message name="IDS_IMPORT_FULL_DISK_ACCESS_DIALOG_MESSAGE" desc="Message for the dialog shown when Full Disk Access is needed to import bookmarks from Safari.">
+-            Helium needs Full Disk Access to import your Bookmarks from Safari.
++            Browse needs Full Disk Access to import your Bookmarks from Safari.
+           </message>
+           <message name="IDS_IMPORT_FULL_DISK_ACCESS_DIALOG_LINK" desc="Help link text in the dialog shown when Full Disk Access is needed to import from Safari.">
+             Learn how to grant Full Disk Access from your System Preferences.
+@@ -11999,7 +11999,7 @@
+ 
+       <if expr="is_macosx">
+         <message name="IDS_KEYCHAIN_STARTUP_ERROR" desc="Startup error shown when the browser cannot access its macOS Keychain encryption key.">
+-          Helium couldn't access the macOS Keychain. To protect your data, the browser will close. If prompted by macOS, allow access to Helium's encryption key. Quit any other copies of Helium, then reopen it.
++          Browse couldn't access the macOS Keychain. To protect your data, the browser will close. If prompted by macOS, allow access to Browse's encryption key. Quit any other copies of Browse, then reopen it.
+         </message>
+         <!-- Confirm to quit panel -->
+         <message name="IDS_CONFIRM_TO_QUIT_DESCRIPTION" desc="Instructions for how the user should confirm quitting.">
+@@ -14131,7 +14131,7 @@
+           Installed because of dependent extension(s).
+         </message>
+         <message name="IDS_EXTENSIONS_INSTALL_LOCATION_HELIUM" desc="The text explaining the the installation location is a Helium component.">
+-          Helium component
++          Browse component
+         </message>
+ 
+         <!-- Extension blocklist state -->
+Index: src/chrome/app/settings_chromium_strings.grdp
+===================================================================
+--- src.orig/chrome/app/settings_chromium_strings.grdp	2026-11-05 06:13:23.364745412 -0500
++++ src/chrome/app/settings_chromium_strings.grdp	2026-11-05 22:42:09.533540694 -0500
+@@ -262,7 +262,7 @@
+     When you type in the address bar or search box, Chromium sends what you type to your default search engine to get better suggestions. This is off in Incognito.
+   </message>
+   <message name="IDS_SETTINGS_SUGGEST_PREF_DESC_HELIUM" desc="The description of the checkbox to enable/disable sending omnibox input to the user's default search engine to get additional suggestions.">
+-    When you type in the address bar, Helium sends what you type to your default search engine to get suggestions. This is off in Incognito.
++    When you type in the address bar, Browse sends what you type to your default search engine to get suggestions. This is off in Incognito.
+   </message>
+   <message name="IDS_SETTINGS_SEARCH_AGGREGATOR_PREF_DESC" desc="The description of the 'Show suggestions and results from your organization' checkbox, which enables/disables sending omnibox input to the user's organization's search aggregator to get additional suggestions. Note that this setting is controlled by enterprise policy and, while a checkbox is shown, it is always enabled and cannot be disabled.">
+     When you type in the address bar or search box, Chromium sends what you type to your organization's search, AI, and agent tools to get suggestions.
+Index: src/chrome/app/settings_strings.grdp
+===================================================================
+--- src.orig/chrome/app/settings_strings.grdp	2026-11-05 06:13:53.630763603 -0500
++++ src/chrome/app/settings_strings.grdp	2026-11-05 22:42:09.550820918 -0500
+@@ -1413,7 +1413,7 @@
+           Please check with your network administrator to make sure that the firewall is not blocking downloads from Google servers.
+         </message>
+         <message name="IDS_SETTINGS_LANGUAGES_DICTIONARY_DOWNLOAD_FAILED_HELP_HELIUM" desc="Error message when spell dictionary download fails more than once possibly due to a network policy or configuration.">
+-          Please check that Helium services are enabled (including spell check downloads) and make sure that the firewall is not blocking downloads from Helium servers.
++          Please check that Browse services are enabled (including spell check downloads) and make sure that the firewall is not blocking downloads from Browse servers.
+         </message>
+       </if>
+     </if>
+@@ -1664,16 +1664,16 @@
+ 
+     <!-- Helium Services Privacy Settings (helium://settings/privacy/services) -->
+     <message name="IDS_SETTINGS_HELIUM_SERVICES" desc="Name of the page which controls connectivity to Helium services">
+-      Helium services
++      Browse services
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_DESCRIPTION" desc="Description of the controls available on the Helium services settings page">
+-      Manage what Helium services are allowed in your browser
++      Manage what Browse services are allowed in your browser
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_CRASH_REPORTING_TITLE" desc="Title of the setting that controls crash reporting">
+       Crash reporting
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_CRASH_REPORTING_DESCRIPTION" desc="Description of the setting that controls crash reporting">
+-      Choose whether Helium can ask to send crash reports or send them automatically. Disabling reports will delete all pending reports.
++      Choose whether Browse can ask to send crash reports or send them automatically. Disabling reports will delete all pending reports.
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_CRASH_REPORTING_DISABLED" desc="Crash reporting option that disables prompts and submissions">
+       Disabled
+@@ -1685,7 +1685,7 @@
+       Send automatically
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SCHEMA_NOTICE_TITLE" desc="Title of the alert shown when Helium services have a change in behavior">
+-      Updates to Helium services:
++      Updates to Browse services:
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SCHEMA_NOTICE_DESCRIPTION" desc="Description of the alert shown when Helium services have a change in behavior">
+       These changes are not active until you dismiss this notice.
+@@ -1694,41 +1694,41 @@
+       Don't notify me again
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_SETUP_PENDING_TEXT" desc="Description shown in services settings when user has not completed onboarding">
+-      Helium services are not available until setup is complete to ensure your privacy and consent.
++      Browse services are not available until setup is complete to ensure your privacy and consent.
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_SETUP_PENDING_BUTTON" desc="Button label directing user to complete onboarding">
+       Complete setup
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_TOGGLE" desc="Global toggle for enabling/disabling of all Helium services">
+-      Allow connecting to Helium services
++      Allow connecting to Browse services
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_TOGGLE_DESCRIPTION" desc="Description of the toggle for enabling/disabling of all Helium services">
+-      When enabled, Helium will be able to connect to anonymous web services to provide additional functionality. When disabled, additional features will not work.
++      When enabled, Browse will be able to connect to anonymous web services to provide additional functionality. When disabled, additional features will not work.
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_EXT_PROXY_TOGGLE" desc="Toggle for enabling/disabling of downloading and proxying extensions">
+       Proxy extension downloads and updates
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_EXT_PROXY_TOGGLE_DESCRIPTION" desc="Description of the toggle for enabling/disabling of downloading and proxying extensions">
+-      When enabled, Helium will proxy extension downloads and updates to protect your privacy. When disabled, downloading and updating extensions will not work.
++      When enabled, Browse will proxy extension downloads and updates to protect your privacy. When disabled, downloading and updating extensions will not work.
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_BANGS_TOGGLE" desc="Toggle for enabling/disabling of downloading bangs">
+       Allow downloading the !bangs list
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_BANGS_TOGGLE_DESCRIPTION" desc="Description of the toggle for enabling/disabling of downloading bangs">
+-      Helium will fetch a list of bangs that help you browse the Internet faster, such as !w or !gh. When disabled, bangs will not work.
++      Browse will fetch a list of bangs that help you browse the Internet faster, such as !w or !gh. When disabled, bangs will not work.
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_SPELLCHECK_TOGGLE" desc="Toggle for enabling/disabling of downloading spellcheck files">
+       Allow downloading dictionary files for spell checking
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_SPELLCHECK_TOGGLE_DESCRIPTION" desc="Description of the for enabling/disabling of downloading spellcheck files">
+-      Helium will fetch dictionary files used for spell checking when requested. When disabled, spell checking will not work.
++      Browse will fetch dictionary files used for spell checking when requested. When disabled, spell checking will not work.
+     </message>
+     <if expr="not is_linux">
+       <message name="IDS_SETTINGS_HELIUM_SERVICES_UPDATE" desc="Toggle for automatic update downloads">
+         Allow automatic browser updates
+       </message>
+       <message name="IDS_SETTINGS_HELIUM_SERVICES_UPDATE_DESCRIPTION" desc="Description of the toggle for automatic update downloads">
+-        Helium will automatically check for updates and install them. This includes browser and component updates. We recommend keeping this setting enabled to ensure you get the latest features and security updates.
++        Browse will automatically check for updates and install them. This includes browser and component updates. We recommend keeping this setting enabled to ensure you get the latest features and security updates.
+       </message>
+     </if>
+     <if expr="is_linux">
+@@ -1736,26 +1736,26 @@
+         Allow automatic component updates
+       </message>
+       <message name="IDS_SETTINGS_HELIUM_SERVICES_UPDATE_DESCRIPTION" desc="Description of the toggle for automatic update downloads">
+-        Helium will automatically check for component updates and install them. We recommend keeping this setting enabled. On Linux, browser updates are handled by your distro's package manager. Please check for Helium package updates at least every week.
++        Browse will automatically check for component updates and install them. We recommend keeping this setting enabled. On Linux, browser updates are handled by your distro's package manager. Please check for Browse package updates at least every week.
+       </message>
+     </if>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_UBO" desc="Description of the toggle for uBO filter lists">
+       Allow downloading filter lists for uBlock Origin
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_UBO_DESCRIPTION" desc="Description of the toggle for automatic update downloads">
+-      Helium will fetch fresh filter lists for uBlock Origin. All requests to lists are proxied to protect your privacy. When disabled, default filter lists will be loaded from local storage, which are only updated along with Helium. Optional filter lists will be requested without proxying.
++      Browse will fetch fresh filter lists for uBlock Origin. All requests to lists are proxied to protect your privacy. When disabled, default filter lists will be loaded from local storage, which are only updated along with Browse. Optional filter lists will be requested without proxying.
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_OVERRIDE" desc="Text input for overriding the Helium services server">
+-      Use your own instance of Helium services
++      Use your own instance of Browse services
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_OVERRIDE_DESCRIPTION" desc="Description of the text input for overriding the Helium services server">
+-      You can host your own instance of Helium services and use it in your browser instead of the default one. HTTPS only.
++      You can host your own instance of Browse services and use it in your browser instead of the default one. HTTPS only.
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_OVERRIDE_DESCRIPTION_WARNING" desc="Warning section of description for overriding the Helium services server">
+       Do not use this field unless you know exactly what you are doing. Never paste URLs from other people here, they are trying to steal your data. We are not responsible for any damages caused by using a custom server and will not be able to help you.
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_OVERRIDE_ARIA_LABEL" desc="ARIA label of the text input for overriding the Helium services server">
+-      Custom origin URL for Helium services
++      Custom origin URL for Browse services
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_SERVICES_OVERRIDE_INVALID_ORIGIN" desc="Validation error shown when the custom Helium services origin is invalid.">
+       Invalid origin
+@@ -1977,7 +1977,7 @@
+       Network and security
+     </message>
+     <message name="IDS_SETTINGS_NETWORK_AND_SECURITY_DESCRIPTION" desc="Description of the settings row that opens the security settings page">
+-      Manage how Helium connects to sites, what privacy signals are allowed, and more
++      Manage how Browse connects to sites, what privacy signals are allowed, and more
+     </message>
+     <message name="IDS_SETTINGS_NETWORK_SECTION_TITLE" desc="Title of the network section on the network and security settings page">
+       Network
+@@ -2282,16 +2282,16 @@
+       Fingerprinting protection
+     </message>
+     <message name="IDS_SETTINGS_NOISE_LINK_DESCRIPTION" desc="Description of the fingerprinting protection link on the Privacy and security settings page.">
+-      Manage how Helium protects you against fingerprinting
++      Manage how Browse protects you against fingerprinting
+     </message>
+     <message name="IDS_SETTINGS_NOISE_TOGGLE_DESCRIPTION" desc="Description of the global fingerprinting protection toggle.">
+       Make it harder for sites to fingerprint your browser and device
+     </message>
+     <message name="IDS_SETTINGS_NOISE_DESCRIPTION" desc="Description of how Helium protects against browser fingerprinting.">
+-      When fingerprinting protection is enabled, Helium adds noise to certain browser features to make it harder for sites to track and profile you. Each site sees consistent randomized information during your browsing session to reduce the chances of detection.
++      When fingerprinting protection is enabled, Browse adds noise to certain browser features to make it harder for sites to track and profile you. Each site sees consistent randomized information during your browsing session to reduce the chances of detection.
+     </message>
+     <message name="IDS_SETTINGS_NOISE_DISCLAIMER" desc="Disclaimer shown below the fingerprinting protection description explaining that Helium makes fingerprint recovery harder but cannot prevent fingerprinting completely.">
+-      Fingerprinting cannot be fully prevented, but Helium's analysis defenses make it harder to recover the original fingerprint.
++      Fingerprinting cannot be fully prevented, but Browse's analysis defenses make it harder to recover the original fingerprint.
+     </message>
+     <message name="IDS_SETTINGS_NOISE_CUSTOM_DESCRIPTION" desc="General explanation of fingerprinting protection site rules and wildcard behavior.">
+       When the general fingerprinting protection feature is enabled, sites listed below follow a custom setting. Inserting "[*.]" before a domain name applies it to the entire domain.
+Index: src/chrome/app/theme/chromium/BRANDING
+===================================================================
+--- src.orig/chrome/app/theme/chromium/BRANDING	2026-11-05 06:12:49.107465842 -0500
++++ src/chrome/app/theme/chromium/BRANDING	2026-11-05 22:42:09.465885764 -0500
+@@ -1,10 +1,10 @@
+-COMPANY_FULLNAME=The Helium Authors
+-COMPANY_SHORTNAME=The Helium Authors
+-PRODUCT_FULLNAME=Helium
+-PRODUCT_SHORTNAME=Helium
+-PRODUCT_INSTALLER_FULLNAME=Helium Installer
+-PRODUCT_INSTALLER_SHORTNAME=Helium Installer
+-COPYRIGHT=Copyright @LASTCHANGE_YEAR@ The Helium Authors. All rights reserved.
+-MAC_BUNDLE_ID=net.imput.helium
++COMPANY_FULLNAME=The Browse Authors
++COMPANY_SHORTNAME=The Browse Authors
++PRODUCT_FULLNAME=Browse
++PRODUCT_SHORTNAME=Browse
++PRODUCT_INSTALLER_FULLNAME=Browse Installer
++PRODUCT_INSTALLER_SHORTNAME=Browse Installer
++COPYRIGHT=Copyright @LASTCHANGE_YEAR@ The Browse Authors and The Helium Authors. All rights reserved.
++MAC_BUNDLE_ID=net.browse.browse
+ MAC_CREATOR_CODE=Cr24
+ MAC_TEAM_ID=S4Q33XPHB4
+Index: src/chrome/common/chrome_paths_mac.mm
+===================================================================
+--- src.orig/chrome/common/chrome_paths_mac.mm	2026-11-05 06:13:55.696048730 -0500
++++ src/chrome/common/chrome_paths_mac.mm	2026-11-05 22:42:09.467189066 -0500
+@@ -32,7 +32,7 @@
+     product_dir_name = [product_dir_name_ns fileSystemRepresentation];
+ 
+     if (!product_dir_name) {
+-      product_dir_name = "net.imput.helium";
++      product_dir_name = "net.browse.browse";
+     }
+ 
+     // Leaked, but the only caller initializes a static with this result, so it

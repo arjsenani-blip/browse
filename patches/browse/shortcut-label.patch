@@ -1,0 +1,13 @@
+Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc	2026-11-05 06:13:16.810935385 -0500
++++ src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc	2026-11-06 07:25:52.271312871 -0500
+@@ -208,6 +208,8 @@
+                        : IDS_SAVE_PAGE);
+     case IDC_TOGGLE_VERTICAL_TABS_COLLAPSE:
+       return Label(IDS_SHORTCUT_COMMAND_TOGGLE_VERTICAL_TABS);
++    case IDC_TOGGLE_VERTICAL_TABS:  // Browse: Shift+Cmd+S sidebar/top tabs.
++      return Label(IDS_SHORTCUT_COMMAND_TOGGLE_VERTICAL_TABS);
+     case IDC_PRINT:
+       return Label(IDS_CONTENT_CONTEXT_PRINT);
+     case IDC_BASIC_PRINT:

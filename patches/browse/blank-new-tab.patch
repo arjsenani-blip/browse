@@ -1,0 +1,106 @@
+Index: src/chrome/browser/chrome_content_browser_client.cc
+===================================================================
+--- src.orig/chrome/browser/chrome_content_browser_client.cc	2026-11-05 06:13:54.455515706 -0500
++++ src/chrome/browser/chrome_content_browser_client.cc	2026-11-05 22:36:46.508831805 -0500
+@@ -937,7 +937,11 @@
+     ntp_location = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("custom-ntp");
+   if (profile->IsOffTheRecord() && ntp_location.find("chrome://") != std::string::npos) return false;
+   if (ntp_location.empty()) {
+-    return false;
++    // Browse: no new tab page. New tabs are a blank page titled "New Tab"
++    // (light/dark aware) and the command bar opens over it.
++    ntp_location =
++        "data:text/html,<!doctype html><meta charset=utf-8>"
++        "<meta name=color-scheme content=\"light dark\"><title>New Tab</title>";
+   }
+   url::Component scheme;
+   if (!url::ExtractScheme(ntp_location, &scheme)) {
+Index: src/chrome/browser/ui/views/frame/browse_loading_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_loading_bar_view.cc	2026-11-05 22:09:11.808394456 -0500
++++ src/chrome/browser/ui/views/frame/browse_loading_bar_view.cc	2026-11-05 22:36:46.512415111 -0500
+@@ -11,7 +11,11 @@
+ #include "cc/paint/paint_shader.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/views/frame/browse_command_bar.h"
+ #include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
++#include "base/task/sequenced_task_runner.h"
++#include "chrome/common/webui_url_constants.h"
++#include "ui/views/widget/widget.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/contents_web_view.h"
+ #include "content/public/browser/web_contents.h"
+@@ -72,6 +76,7 @@
+     AnimateTo(std::max(kStartProgress, web_contents->GetLoadProgress()));
+   } else {
+     HideNow();
++    MaybeShowCommandBar();
+   }
+ }
+ 
+@@ -130,6 +135,29 @@
+   if (active_) {
+     FinishAndFade();
+   }
++  MaybeShowCommandBar();
++}
++
++void BrowseLoadingBarView::MaybeShowCommandBar() {
++  content::WebContents* contents = web_contents();
++  if (!contents || contents->IsLoading() ||
++      contents->GetVisibleURL() != GURL(chrome::kChromeUINewTabURL)) {
++    return;
++  }
++  const uintptr_t id = reinterpret_cast<uintptr_t>(contents);
++  if (id == command_bar_shown_for_) {
++    return;
++  }
++  command_bar_shown_for_ = id;
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          [](base::WeakPtr<BrowseLoadingBarView> self) {
++            if (self && self->GetWidget() && self->GetWidget()->IsActive()) {
++              browse_command_bar::Show(self->browser_view_->browser());
++            }
++          },
++          weak_factory_.GetWeakPtr()));
+ }
+ 
+ void BrowseLoadingBarView::LoadProgressChanged(double progress) {
+Index: src/chrome/browser/ui/views/frame/browse_loading_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_loading_bar_view.h	2026-11-05 22:06:25.457409807 -0500
++++ src/chrome/browser/ui/views/frame/browse_loading_bar_view.h	2026-11-05 22:36:46.513039737 -0500
+@@ -8,6 +8,7 @@
+ #include <memory>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "content/public/browser/web_contents_observer.h"
+ #include "third_party/skia/include/core/SkColor.h"
+@@ -63,6 +64,7 @@
+   void AnimateTo(double target);
+   void FinishAndFade();
+   void HideNow();
++  void MaybeShowCommandBar();
+ 
+   raw_ptr<BrowserView> browser_view_;
+   raw_ptr<ContentsWebView> host_;
+@@ -72,11 +74,14 @@
+   SkColor color_ = SK_ColorCYAN;
+   SkColor end_color_ = SK_ColorBLUE;
+   bool active_ = false;
++  // Last blank new tab the command bar auto-opened for (identity only).
++  uintptr_t command_bar_shown_for_ = 0;
+   bool finishing_ = false;
+   double shown_ = 0.0;
+   double from_ = 0.0;
+   double to_ = 0.0;
+   std::unique_ptr<gfx::SlideAnimation> progress_animation_;
++  base::WeakPtrFactory<BrowseLoadingBarView> weak_factory_{this};
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_LOADING_BAR_VIEW_H_

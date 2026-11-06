@@ -1,0 +1,62 @@
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_space_indicator_view.cc	2026-11-05 21:58:53.971819788 -0500
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc	2026-11-05 22:06:12.061011166 -0500
+@@ -102,21 +102,29 @@
+   return -1;
+ }
+ 
++namespace {
++// Neon gradient pairs (start, end), one per space.
++constexpr SkColor kGradients[][2] = {
++    {SkColorSetRGB(0x22, 0xD3, 0xEE), SkColorSetRGB(0x3B, 0x82, 0xF6)},
++    {SkColorSetRGB(0xA8, 0x55, 0xF7), SkColorSetRGB(0xEC, 0x48, 0x99)},
++    {SkColorSetRGB(0xA3, 0xE6, 0x35), SkColorSetRGB(0x10, 0xB9, 0x81)},
++    {SkColorSetRGB(0xFB, 0xBF, 0x24), SkColorSetRGB(0xF9, 0x73, 0x16)},
++    {SkColorSetRGB(0xF4, 0x72, 0xB6), SkColorSetRGB(0xF4, 0x3F, 0x5E)},
++    {SkColorSetRGB(0x81, 0x8C, 0xF8), SkColorSetRGB(0x22, 0xD3, 0xEE)},
++    {SkColorSetRGB(0xF2, 0xC9, 0x4C), SkColorSetRGB(0xFB, 0x92, 0x3C)},
++    {SkColorSetRGB(0x2D, 0xD4, 0xBF), SkColorSetRGB(0x22, 0xD3, 0xEE)},
++};
++size_t GradientSlot(int index) {
++  return static_cast<size_t>(index < 0 ? 0 : index) % std::size(kGradients);
++}
++}  // namespace
++
+ SkColor ColorForIndex(int index) {
+-  static constexpr SkColor kPalette[] = {
+-      SkColorSetRGB(0x22, 0xD3, 0xEE),  // cyan
+-      SkColorSetRGB(0xA7, 0x8B, 0xFA),  // violet
+-      SkColorSetRGB(0x34, 0xD3, 0x99),  // green
+-      SkColorSetRGB(0x60, 0xA5, 0xFA),  // blue
+-      SkColorSetRGB(0xF4, 0x72, 0xB6),  // pink
+-      SkColorSetRGB(0xFB, 0x92, 0x3C),  // orange
+-      SkColorSetRGB(0xF2, 0xC9, 0x4C),  // gold
+-      SkColorSetRGB(0x2D, 0xD4, 0xBF),  // teal
+-  };
+-  if (index < 0) {
+-    index = 0;
+-  }
+-  return kPalette[index % std::size(kPalette)];
++  return kGradients[GradientSlot(index)][0];
++}
++
++SkColor GradientEndForIndex(int index) {
++  return kGradients[GradientSlot(index)][1];
+ }
+ 
+ void SwitchToSpace(BrowserView* from, const base::FilePath& path) {
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_space_indicator_view.h	2026-11-05 21:53:24.421886980 -0500
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.h	2026-11-05 22:06:12.062202950 -0500
+@@ -50,6 +50,9 @@
+ // Default palette, picked by space index.
+ SkColor ColorForIndex(int index);
+ 
++// End color of the space's neon gradient (ColorForIndex is the start).
++SkColor GradientEndForIndex(int index);
++
+ // Brings `path`'s window to the front in exactly `from`'s window frame,
+ // opening a new window there if the profile has none.
+ void SwitchToSpace(BrowserView* from, const base::FilePath& path);

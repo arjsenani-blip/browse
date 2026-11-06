@@ -1,0 +1,1210 @@
+Index: src/chrome/browser/prefs/browser_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/prefs/browser_prefs.cc	2026-11-05 22:06:12.155502000 -0500
++++ src/chrome/browser/prefs/browser_prefs.cc	2026-11-06 07:57:01.974271981 -0500
+@@ -1531,6 +1531,8 @@
+       registry);
+ #endif
+   autofill::prefs::RegisterLocalStatePrefs(registry);
++  // Browse: icon/color chosen for each space.
++  registry->RegisterDictionaryPref("browse.space_styles");
+   breadcrumbs::RegisterPrefs(registry);
+   browser_shutdown::RegisterPrefs(registry);
+   BrowserProcessImpl::RegisterPrefs(registry);
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn	2026-11-05 22:34:05.536736461 -0500
++++ src/chrome/browser/ui/BUILD.gn	2026-11-06 07:57:01.975831208 -0500
+@@ -3553,6 +3553,8 @@
+       "views/frame/base_tab_strip_region_view.cc",
+       "views/frame/browse_command_bar.cc",
+       "views/frame/browse_command_bar.h",
++      "views/frame/browse_new_space_sheet.cc",
++      "views/frame/browse_new_space_sheet.h",
+       "views/frame/browse_loading_bar_view.cc",
+       "views/frame/browse_loading_bar_view.h",
+       "views/frame/browse_space_indicator_view.cc",
+Index: src/chrome/browser/ui/views/frame/browse_command_bar.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_command_bar.cc	2026-11-05 22:17:55.495672045 -0500
++++ src/chrome/browser/ui/views/frame/browse_command_bar.cc	2026-11-06 07:57:01.972950702 -0500
+@@ -262,8 +262,9 @@
+   const std::vector<browse_spaces::Space> spaces = browse_spaces::GetSpaces();
+   const int index = std::max(
+       0, browse_spaces::IndexOfProfile(spaces, profile_->GetOriginalProfile()));
+-  accent_ = browse_spaces::ColorForIndex(index);
+-  accent_end_ = browse_spaces::GradientEndForIndex(index);
++  accent_ = browse_spaces::ColorForIndex(browse_spaces::GradientFor(spaces, index));
++  accent_end_ =
++      browse_spaces::GradientEndForIndex(browse_spaces::GradientFor(spaces, index));
+ 
+   SetPaintToLayer();
+   layer()->SetFillsBoundsOpaquely(false);
+Index: src/chrome/browser/ui/views/frame/browse_loading_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_loading_bar_view.cc	2026-11-05 22:36:46.512415111 -0500
++++ src/chrome/browser/ui/views/frame/browse_loading_bar_view.cc	2026-11-06 07:57:01.972362567 -0500
+@@ -219,8 +219,9 @@
+   Profile* profile = browser_view_->browser()->GetProfile();
+   const std::vector<browse_spaces::Space> spaces = browse_spaces::GetSpaces();
+   const int index = browse_spaces::IndexOfProfile(spaces, profile);
+-  color_ = browse_spaces::ColorForIndex(std::max(index, 0));
+-  end_color_ = browse_spaces::GradientEndForIndex(std::max(index, 0));
++  const int slot = browse_spaces::GradientFor(spaces, std::max(index, 0));
++  color_ = browse_spaces::ColorForIndex(slot);
++  end_color_ = browse_spaces::GradientEndForIndex(slot);
+   if (shown_ > 0.0) {
+     SchedulePaint();
+   }
+Index: src/chrome/browser/ui/views/frame/browse_new_space_sheet.cc
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_new_space_sheet.cc	2026-11-06 08:10:17.274924408 -0500
+@@ -0,0 +1,680 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/browse_new_space_sheet.h"
++
++#include <algorithm>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/memory/raw_ptr.h"
++#include "base/no_destructor.h"
++#include "base/scoped_observation.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
++#include "base/task/sequenced_task_runner.h"
++#include "cc/paint/paint_filter.h"
++#include "cc/paint/paint_flags.h"
++#include "cc/paint/paint_shader.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_avatar_icon_util.h"
++#include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/contents_container_view.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/compositor/layer.h"
++#include "ui/compositor/scoped_layer_animation_settings.h"
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/font_list.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/geometry/transform.h"
++#include "ui/gfx/paint_vector_icon.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/controls/textfield/textfield_controller.h"
++#include "ui/views/view.h"
++#include "ui/views/widget/widget.h"
++#include "ui/views/widget/widget_observer.h"
++
++namespace browse_new_space {
++namespace {
++
++// Floating card (top tab bar mode).
++constexpr int kCardWidth = 360;
++constexpr int kCardHeight = 420;
++constexpr int kCardRadius = 16;
++constexpr int kBadgeSize = 44;
++constexpr int kFieldHeight = 40;
++constexpr int kIconCell = 28;
++constexpr int kIconsPerRow = 5;
++constexpr int kColorDot = 20;
++constexpr int kButtonHeight = 36;
++
++// Vertical positions, from the top of the card / panel.
++struct Geometry {
++  int pad = 24;
++  int badge_top = 28;
++  int title_top = 84;
++  int subtitle_top = 112;
++  int field_top = 160;
++  int icon_label_top = 216;
++  int icon_row_top = 236;
++  int color_label_top = 310;
++  int color_row_top = 330;
++  int button_top = 0;  // Set from the height.
++  int cancel_top = 0;
++};
++
++Geometry GeometryFor(bool panel, int height) {
++  Geometry g;
++  if (panel) {
++    // Arc-style: the sidebar itself becomes the panel.
++    g.pad = 14;
++    g.badge_top = 56;
++    g.title_top = 112;
++    g.subtitle_top = 140;
++    g.field_top = 190;
++    g.icon_label_top = 246;
++    g.icon_row_top = 266;
++    g.color_label_top = 340;
++    g.color_row_top = 360;
++    g.button_top = std::max(g.color_row_top + 44, height - 110);
++    g.cancel_top = g.button_top + kButtonHeight + 8;
++  } else {
++    g.button_top = height - 76;
++    g.cancel_top = g.button_top + kButtonHeight + 4;
++  }
++  return g;
++}
++
++const SkColor kCardColor = SK_ColorWHITE;
++const SkColor kTextColor = SkColorSetRGB(0x18, 0x18, 0x1B);
++const SkColor kSubtleText = SkColorSetRGB(0x71, 0x71, 0x7A);
++const SkColor kFieldFill = SkColorSetARGB(0x0B, 0, 0, 0);
++const SkColor kSelectedFill = SkColorSetARGB(0x12, 0, 0, 0);
++
++const gfx::FontList& TitleFont() {
++  static const base::NoDestructor<gfx::FontList> font(
++      gfx::FontList().DeriveWithSizeDelta(4).DeriveWithWeight(
++          gfx::Font::Weight::SEMIBOLD));
++  return *font;
++}
++
++const gfx::FontList& SubtitleFont() {
++  static const base::NoDestructor<gfx::FontList> font(
++      gfx::FontList().DeriveWithSizeDelta(-1));
++  return *font;
++}
++
++const gfx::FontList& LabelFont() {
++  static const base::NoDestructor<gfx::FontList> font(
++      gfx::FontList().DeriveWithSizeDelta(-1).DeriveWithWeight(
++          gfx::Font::Weight::MEDIUM));
++  return *font;
++}
++
++const gfx::FontList& ButtonFont() {
++  static const base::NoDestructor<gfx::FontList> font(
++      gfx::FontList().DeriveWithWeight(gfx::Font::Weight::MEDIUM));
++  return *font;
++}
++
++cc::PaintFlags GradientFlags(const gfx::RectF& r, int slot, bool diagonal) {
++  const SkPoint points[2] = {
++      SkPoint::Make(r.x(), r.y()),
++      diagonal ? SkPoint::Make(r.right(), r.bottom())
++               : SkPoint::Make(r.right(), r.y())};
++  const SkColor4f colors[2] = {
++      SkColor4f::FromColor(browse_spaces::ColorForIndex(slot)),
++      SkColor4f::FromColor(browse_spaces::GradientEndForIndex(slot))};
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  flags.setShader(cc::PaintShader::MakeLinearGradient(points, colors, nullptr,
++                                                      2, SkTileMode::kClamp));
++  return flags;
++}
++
++class SheetView;
++
++// The white card: paints the badge, labels, pickers and buttons around the
++// name field, and handles clicks on them.
++class SheetCard : public views::View {
++  METADATA_HEADER(SheetCard, views::View)
++
++ public:
++  SheetCard(SheetView* owner, bool panel) : owner_(owner), panel_(panel) {}
++
++  Geometry geo() const { return GeometryFor(panel_, height()); }
++  int inner_width() const { return width() - 2 * geo().pad; }
++
++  // Icons in two rows of five, spread across the width.
++  gfx::Rect IconCell(int i) const {
++    const Geometry g = geo();
++    const int gap = (inner_width() - kIconsPerRow * kIconCell) /
++                    (kIconsPerRow - 1);
++    return gfx::Rect(g.pad + (i % kIconsPerRow) * (kIconCell + gap),
++                     g.icon_row_top + (i / kIconsPerRow) * (kIconCell + 6),
++                     kIconCell, kIconCell);
++  }
++  gfx::Rect ColorDot(int i) const {
++    const Geometry g = geo();
++    const int count = browse_spaces::GradientCount();
++    const int gap = (inner_width() - 4 - count * kColorDot) / (count - 1);
++    return gfx::Rect(g.pad + 2 + i * (kColorDot + gap), g.color_row_top,
++                     kColorDot, kColorDot);
++  }
++  gfx::Rect CreateButton() const {
++    const Geometry g = geo();
++    return gfx::Rect(g.pad, g.button_top, inner_width(), kButtonHeight);
++  }
++  gfx::Rect CancelButton() const {
++    const Geometry g = geo();
++    return gfx::Rect(g.pad, g.cancel_top, inner_width(), 28);
++  }
++  gfx::Rect FieldRect() const {
++    const Geometry g = geo();
++    return gfx::Rect(g.pad, g.field_top, inner_width(), kFieldHeight);
++  }
++  bool panel() const { return panel_; }
++
++  void OnPaint(gfx::Canvas* canvas) override;
++  bool OnMousePressed(const ui::MouseEvent& event) override;
++
++ private:
++  raw_ptr<SheetView> owner_;
++  bool panel_;
++};
++
++BEGIN_METADATA(SheetCard)
++END_METADATA
++
++class SheetView : public views::View, public views::TextfieldController {
++  METADATA_HEADER(SheetView, views::View)
++
++ public:
++  SheetView(BrowserView* browser_view,
++            bool panel,
++            base::OnceClosure close_callback)
++      : browser_view_(browser_view),
++        panel_(panel),
++        close_callback_(std::move(close_callback)) {
++    spaces_ = browse_spaces::GetSpaces();
++    const int count = static_cast<int>(spaces_.size());
++    // Default to the next color in the palette that no space uses yet.
++    gradient_ = count % browse_spaces::GradientCount();
++    for (int g = 0; g < browse_spaces::GradientCount(); ++g) {
++      bool used = false;
++      for (int i = 0; i < count; ++i) {
++        used |= browse_spaces::GradientFor(spaces_, i) %
++                    browse_spaces::GradientCount() ==
++                g;
++      }
++      if (!used) {
++        gradient_ = g;
++        break;
++      }
++    }
++
++    SetPaintToLayer();
++    layer()->SetFillsBoundsOpaquely(false);
++
++    card_ = AddChildView(std::make_unique<SheetCard>(this, panel_));
++    card_->SetPaintToLayer();
++    card_->layer()->SetFillsBoundsOpaquely(false);
++    if (!panel_) {
++      card_->layer()->SetRoundedCornerRadius(
++          gfx::RoundedCornersF(kCardRadius));
++    }
++
++    field_ = card_->AddChildView(std::make_unique<views::Textfield>());
++    field_->set_controller(this);
++    field_->SetBorder(nullptr);
++    field_->SetBackground(nullptr);
++    field_->SetColor(kTextColor);
++    field_->SetFontList(gfx::FontList().DeriveWithSizeDelta(1));
++    field_->SetPlaceholderText(DefaultName());
++    field_->GetViewAccessibility().SetName(u"Space name");
++  }
++
++  int icon() const { return icon_; }
++  int gradient() const { return gradient_; }
++  void set_icon(int icon) {
++    icon_ = icon;
++    card_->SchedulePaint();
++  }
++  void set_gradient(int gradient) {
++    gradient_ = gradient;
++    SchedulePaint();
++    card_->SchedulePaint();
++  }
++
++  std::u16string DefaultName() const {
++    return u"Space " + base::NumberToString16(spaces_.size() + 1);
++  }
++  std::u16string Name() const {
++    std::u16string name;
++    base::TrimWhitespace(std::u16string(field_->GetText()), base::TRIM_ALL,
++                         &name);
++    return name.empty() ? DefaultName() : name;
++  }
++
++  // The icon shown in the badge: the chosen one, or what the name suggests.
++  const gfx::VectorIcon& PreviewIcon() const {
++    browse_spaces::Space preview{base::FilePath(), Name(), icon_, -1};
++    return browse_spaces::IconForSpace(preview,
++                                       static_cast<int>(spaces_.size()));
++  }
++  // Icon choice that the automatic pick corresponds to, for highlighting.
++  int EffectiveIcon() const {
++    if (icon_ >= 0) {
++      return icon_;
++    }
++    const gfx::VectorIcon& auto_icon = PreviewIcon();
++    for (int i = 0; i < browse_spaces::SpaceIconChoiceCount(); ++i) {
++      if (&browse_spaces::SpaceIconChoice(i) == &auto_icon) {
++        return i;
++      }
++    }
++    return -1;
++  }
++
++  void FocusField() { field_->RequestFocus(); }
++
++  void AnimateIn() {
++    layer()->SetOpacity(0.f);
++    gfx::Transform start;
++    if (panel_) {
++      start.Translate(-24.f, 0);  // Slides in from the left, like Arc.
++    } else {
++      start.Translate(0, 10.f);
++      start.Scale(0.96f, 0.96f);
++    }
++    card_->layer()->SetTransform(start);
++    {
++      ui::ScopedLayerAnimationSettings settings(layer()->GetAnimator());
++      settings.SetTransitionDuration(base::Milliseconds(160));
++      settings.SetTweenType(gfx::Tween::EASE_OUT);
++      layer()->SetOpacity(1.f);
++    }
++    ui::ScopedLayerAnimationSettings settings(card_->layer()->GetAnimator());
++    settings.SetTransitionDuration(base::Milliseconds(240));
++    settings.SetTweenType(gfx::Tween::EASE_OUT_3);
++    card_->layer()->SetTransform(gfx::Transform());
++  }
++
++  void Create() {
++    if (created_) {
++      return;
++    }
++    created_ = true;
++    bool keep_frame = false;
++    gfx::Rect frame;
++    if (views::Widget* widget = browser_view_->GetWidget()) {
++      keep_frame = !widget->IsFullscreen() && !widget->IsMinimized();
++      frame = widget->GetWindowBoundsInScreen();
++    }
++    ProfileManager::CreateMultiProfileAsync(
++        Name(), profiles::GetPlaceholderAvatarIndex(), /*is_hidden=*/false,
++        base::BindOnce(
++            [](int icon, int gradient, bool keep_frame, gfx::Rect frame,
++               Profile* profile) {
++              if (!profile) {
++                return;
++              }
++              browse_spaces::SetSpaceStyle(profile->GetPath(), icon, gradient);
++              browse_spaces::OpenSpaceInFrame(profile->GetPath(), keep_frame,
++                                              frame);
++            },
++            icon_, gradient_, keep_frame, frame));
++    Close();
++  }
++
++  void Close() {
++    if (close_callback_) {
++      std::move(close_callback_).Run();
++    }
++  }
++
++  // views::View:
++  void Layout(PassKey) override {
++    if (panel_) {
++      card_->SetBoundsRect(GetLocalBounds());
++    } else {
++      const int w = std::min(kCardWidth, width() - 32);
++      card_->SetBounds((width() - w) / 2,
++                       std::max(16, (height() - kCardHeight) * 2 / 5), w,
++                       kCardHeight);
++    }
++    // Room on the left of the field for the chosen icon.
++    const gfx::Rect field = card_->FieldRect();
++    field_->SetBounds(field.x() + 38, field.y(), field.width() - 48,
++                      field.height());
++  }
++
++  void OnPaint(gfx::Canvas* canvas) override {
++    if (panel_) {
++      return;  // The card covers the whole sidebar.
++    }
++    const gfx::RectF bounds(GetLocalBounds());
++    // Wash in the chosen gradient, so the page previews the space's color.
++    cc::PaintFlags wash;
++    const SkPoint points[2] = {SkPoint::Make(0, 0),
++                               SkPoint::Make(bounds.width(), bounds.height())};
++    const SkColor4f colors[2] = {
++        SkColor4f::FromColor(
++            SkColorSetA(browse_spaces::ColorForIndex(gradient_), 0x48)),
++        SkColor4f::FromColor(
++            SkColorSetA(browse_spaces::GradientEndForIndex(gradient_), 0x38))};
++    wash.setShader(cc::PaintShader::MakeLinearGradient(points, colors, nullptr,
++                                                       2, SkTileMode::kClamp));
++    canvas->DrawRect(bounds, wash);
++    cc::PaintFlags veil;
++    veil.setColor(SkColorSetA(SK_ColorWHITE, 0x55));
++    canvas->DrawRect(bounds, veil);
++
++    cc::PaintFlags shadow;
++    shadow.setAntiAlias(true);
++    shadow.setColor(SkColorSetA(SK_ColorBLACK, 0x2A));
++    shadow.setImageFilter(sk_make_sp<cc::BlurPaintFilter>(
++        20.f, 20.f, SkTileMode::kDecal, nullptr));
++    gfx::RectF shadow_rect(card_->bounds());
++    shadow_rect.Offset(0, 12);
++    canvas->DrawRoundRect(shadow_rect, kCardRadius, shadow);
++  }
++
++  bool OnMousePressed(const ui::MouseEvent& event) override {
++    if (!card_->bounds().Contains(event.location())) {
++      Close();
++    }
++    return true;
++  }
++
++  // views::TextfieldController:
++  void ContentsChanged(views::Textfield* sender,
++                       const std::u16string& new_contents) override {
++    card_->SchedulePaint();  // The automatic icon follows the name.
++  }
++  bool HandleKeyEvent(views::Textfield* sender,
++                      const ui::KeyEvent& event) override {
++    if (event.type() != ui::EventType::kKeyPressed) {
++      return false;
++    }
++    switch (event.key_code()) {
++      case ui::VKEY_RETURN:
++        Create();
++        return true;
++      case ui::VKEY_ESCAPE:
++        Close();
++        return true;
++      default:
++        return false;
++    }
++  }
++
++ private:
++  raw_ptr<BrowserView> browser_view_;
++  bool panel_;
++  base::OnceClosure close_callback_;
++  std::vector<browse_spaces::Space> spaces_;
++  raw_ptr<SheetCard> card_ = nullptr;
++  raw_ptr<views::Textfield> field_ = nullptr;
++  int icon_ = -1;  // -1: pick from the name.
++  int gradient_ = 0;
++  bool created_ = false;
++};
++
++BEGIN_METADATA(SheetView)
++END_METADATA
++
++void SheetCard::OnPaint(gfx::Canvas* canvas) {
++  const Geometry g = geo();
++  const int w = width();
++  const int slot = owner_->gradient();
++  if (panel_) {
++    // Light panel washed with the space's gradient, like Arc's.
++    canvas->DrawColor(SkColorSetRGB(0xF6, 0xF6, 0xF7));
++    const SkPoint points[2] = {SkPoint::Make(0, 0),
++                               SkPoint::Make(w * 0.6f, height())};
++    const SkColor4f colors[2] = {
++        SkColor4f::FromColor(
++            SkColorSetA(browse_spaces::ColorForIndex(slot), 0x30)),
++        SkColor4f::FromColor(
++            SkColorSetA(browse_spaces::GradientEndForIndex(slot), 0x18))};
++    cc::PaintFlags wash;
++    wash.setShader(cc::PaintShader::MakeLinearGradient(
++        points, colors, nullptr, 2, SkTileMode::kClamp));
++    canvas->DrawRect(gfx::RectF(GetLocalBounds()), wash);
++  } else {
++    canvas->DrawColor(kCardColor);
++  }
++
++  // Badge: the space's icon on its gradient, with two tilted cards behind
++  // it (a nod to Arc's card-stack illustration).
++  const gfx::RectF badge((w - kBadgeSize) / 2.f, g.badge_top, kBadgeSize,
++                         kBadgeSize);
++  for (int side : {-1, 1}) {
++    canvas->Save();
++    canvas->Translate(gfx::Vector2d(std::lround(badge.CenterPoint().x()),
++                                    std::lround(badge.CenterPoint().y())));
++    canvas->sk_canvas()->rotate(side * 14.f);
++    cc::PaintFlags back;
++    back.setAntiAlias(true);
++    back.setColor(SkColorSetA(SK_ColorWHITE, 0xF0));
++    const gfx::RectF r(side * 12 - kBadgeSize / 2.f + 2, -kBadgeSize / 2.f + 3,
++                       kBadgeSize - 4, kBadgeSize - 4);
++    cc::PaintFlags edge;
++    edge.setAntiAlias(true);
++    edge.setStyle(cc::PaintFlags::kStroke_Style);
++    edge.setStrokeWidth(1);
++    edge.setColor(SkColorSetARGB(0x1A, 0, 0, 0));
++    canvas->DrawRoundRect(r, 10, back);
++    canvas->DrawRoundRect(r, 10, edge);
++    canvas->Restore();
++  }
++  canvas->DrawRoundRect(badge, 12, GradientFlags(badge, slot, true));
++  constexpr int kBadgeIcon = 22;
++  canvas->DrawImageInt(
++      gfx::CreateVectorIcon(owner_->PreviewIcon(), kBadgeIcon, SK_ColorWHITE),
++      (w - kBadgeIcon) / 2, g.badge_top + (kBadgeSize - kBadgeIcon) / 2);
++
++  canvas->DrawStringRectWithFlags(u"Create a Space", TitleFont(), kTextColor,
++                                  gfx::Rect(0, g.title_top, w, 24),
++                                  gfx::Canvas::TEXT_ALIGN_CENTER);
++  canvas->DrawStringRectWithFlags(
++      u"Separate your tabs for life, work, projects, and more.",
++      SubtitleFont(), kSubtleText,
++      gfx::Rect(g.pad, g.subtitle_top, inner_width(), 36),
++      gfx::Canvas::TEXT_ALIGN_CENTER | gfx::Canvas::MULTI_LINE);
++
++  // Name field, with the chosen icon on its left.
++  const gfx::Rect field_rect = FieldRect();
++  cc::PaintFlags field;
++  field.setAntiAlias(true);
++  field.setColor(panel_ ? SkColorSetA(SK_ColorWHITE, 0xE6) : kFieldFill);
++  canvas->DrawRoundRect(gfx::RectF(field_rect), 10, field);
++  constexpr int kFieldIcon = 16;
++  canvas->DrawImageInt(
++      gfx::CreateVectorIcon(owner_->PreviewIcon(), kFieldIcon,
++                            browse_spaces::ColorForIndex(slot)),
++      field_rect.x() + 13, field_rect.y() + (kFieldHeight - kFieldIcon) / 2);
++
++  canvas->DrawStringRectWithFlags(u"Icon", LabelFont(), kSubtleText,
++                                  gfx::Rect(g.pad, g.icon_label_top, w, 16),
++                                  gfx::Canvas::TEXT_ALIGN_LEFT);
++  const int selected_icon = owner_->EffectiveIcon();
++  for (int i = 0; i < browse_spaces::SpaceIconChoiceCount(); ++i) {
++    const gfx::Rect cell = IconCell(i);
++    const bool selected = i == selected_icon;
++    if (selected) {
++      cc::PaintFlags fill;
++      fill.setAntiAlias(true);
++      fill.setColor(panel_ ? SK_ColorWHITE : kSelectedFill);
++      canvas->DrawRoundRect(gfx::RectF(cell), 8, fill);
++    }
++    constexpr int kIcon = 16;
++    canvas->DrawImageInt(
++        gfx::CreateVectorIcon(browse_spaces::SpaceIconChoice(i), kIcon,
++                              selected ? kTextColor : kSubtleText),
++        cell.x() + (kIconCell - kIcon) / 2, cell.y() + (kIconCell - kIcon) / 2);
++  }
++
++  canvas->DrawStringRectWithFlags(u"Color", LabelFont(), kSubtleText,
++                                  gfx::Rect(g.pad, g.color_label_top, w, 16),
++                                  gfx::Canvas::TEXT_ALIGN_LEFT);
++  for (int i = 0; i < browse_spaces::GradientCount(); ++i) {
++    const gfx::RectF dot(ColorDot(i));
++    if (i == slot) {
++      cc::PaintFlags ring = GradientFlags(dot, i, true);
++      ring.setStyle(cc::PaintFlags::kStroke_Style);
++      ring.setStrokeWidth(2);
++      gfx::RectF outer = dot;
++      outer.Inset(-3.5f);
++      canvas->DrawRoundRect(outer, outer.width() / 2, ring);
++    }
++    canvas->DrawRoundRect(dot, dot.width() / 2, GradientFlags(dot, i, true));
++  }
++
++  // Full-width gradient button, "Cancel" under it.
++  const gfx::RectF create(CreateButton());
++  canvas->DrawRoundRect(create, 10, GradientFlags(create, slot, false));
++  canvas->DrawStringRectWithFlags(u"Create Space", ButtonFont(), SK_ColorWHITE,
++                                  CreateButton(),
++                                  gfx::Canvas::TEXT_ALIGN_CENTER);
++  canvas->DrawStringRectWithFlags(u"Cancel", ButtonFont(), kSubtleText,
++                                  CancelButton(),
++                                  gfx::Canvas::TEXT_ALIGN_CENTER);
++}
++
++bool SheetCard::OnMousePressed(const ui::MouseEvent& event) {
++  const gfx::Point p = event.location();
++  for (int i = 0; i < browse_spaces::SpaceIconChoiceCount(); ++i) {
++    if (IconCell(i).Contains(p)) {
++      owner_->set_icon(i);
++      return true;
++    }
++  }
++  for (int i = 0; i < browse_spaces::GradientCount(); ++i) {
++    gfx::Rect hit = ColorDot(i);
++    hit.Inset(-4);
++    if (hit.Contains(p)) {
++      owner_->set_gradient(i);
++      return true;
++    }
++  }
++  if (CreateButton().Contains(p)) {
++    owner_->Create();
++  } else if (CancelButton().Contains(p)) {
++    owner_->Close();
++  } else {
++    owner_->FocusField();
++  }
++  return true;
++}
++
++// Owns the sheet's widget. Only one sheet is open at a time.
++class Sheet : public views::WidgetObserver {
++ public:
++  Sheet(BrowserView* browser_view, views::View* sidebar) {
++    views::Widget* parent = browser_view->GetWidget();
++    widget_ = std::make_unique<views::Widget>();
++    views::Widget::InitParams params(
++        views::Widget::InitParams::CLIENT_OWNS_WIDGET,
++        views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
++    params.parent = parent->GetNativeView();
++    params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
++    params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
++    params.activatable = views::Widget::InitParams::Activatable::kYes;
++    params.name = "BrowseNewSpaceSheet";
++    params.bounds = sidebar ? sidebar->GetBoundsInScreen()
++                            : browser_view->contents_container()
++                                  ->GetBoundsInScreen();
++    widget_->Init(std::move(params));
++    view_ = widget_->SetContentsView(std::make_unique<SheetView>(
++        browser_view, /*panel=*/sidebar != nullptr,
++        base::BindOnce(&Sheet::RequestClose, base::Unretained(this))));
++    widget_observation_.Observe(widget_.get());
++    parent_observation_.Observe(parent);
++    widget_->Show();
++    view_->AnimateIn();
++    view_->FocusField();
++  }
++  ~Sheet() override = default;
++
++  void RequestClose();
++
++  // views::WidgetObserver:
++  void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
++    if (widget == widget_.get() && !active) {
++      RequestClose();
++    }
++  }
++  void OnWidgetDestroying(views::Widget* widget) override {
++    widget_observation_.Reset();
++    parent_observation_.Reset();
++    if (widget != widget_.get()) {
++      RequestClose();
++    }
++  }
++  void OnWidgetBoundsChanged(views::Widget* widget,
++                             const gfx::Rect& new_bounds) override {
++    if (widget != widget_.get()) {
++      RequestClose();
++    }
++  }
++
++ private:
++  std::unique_ptr<views::Widget> widget_;
++  raw_ptr<SheetView> view_ = nullptr;
++  bool closing_ = false;
++  base::ScopedObservation<views::Widget, views::WidgetObserver>
++      widget_observation_{this};
++  base::ScopedObservation<views::Widget, views::WidgetObserver>
++      parent_observation_{this};
++};
++
++std::unique_ptr<Sheet>& Current() {
++  static base::NoDestructor<std::unique_ptr<Sheet>> current;
++  return *current;
++}
++
++void Sheet::RequestClose() {
++  if (closing_) {
++    return;
++  }
++  closing_ = true;
++  widget_observation_.Reset();
++  parent_observation_.Reset();
++  if (widget_) {
++    widget_->Hide();
++  }
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce([]() { Current().reset(); }));
++}
++
++}  // namespace
++
++void Show(BrowserView* browser_view, views::View* sidebar) {
++  if (!browser_view || !browser_view->GetWidget() ||
++      !browser_view->contents_container() ||
++      browser_view->GetWidget()->IsFullscreen()) {
++    return;
++  }
++  if (Current()) {
++    Current().reset();
++  }
++  if (sidebar && (!sidebar->GetWidget() || !sidebar->GetVisible() ||
++                  sidebar->width() < 180)) {
++    sidebar = nullptr;  // Collapsed sidebar: use the floating card.
++  }
++  Current() = std::make_unique<Sheet>(browser_view, sidebar);
++}
++
++}  // namespace browse_new_space
+Index: src/chrome/browser/ui/views/frame/browse_new_space_sheet.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_new_space_sheet.h	2026-11-06 08:10:17.407553868 -0500
+@@ -0,0 +1,27 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_NEW_SPACE_SHEET_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_NEW_SPACE_SHEET_H_
++
++class BrowserView;
++
++namespace views {
++class View;
++}
++
++// Browse: the "Create a Space" sheet, with a name
++// field, an icon picker and a neon gradient picker. Creating it makes a new
++// profile (its own cookies, logins and history) and switches to it in the
++// same window frame. Opened by swiping past the last space or from the
++// spaces menu.
++namespace browse_new_space {
++
++// With `sidebar`, the sheet takes over the sidebar like Arc's panel;
++// otherwise it floats over the page.
++void Show(BrowserView* browser_view, views::View* sidebar = nullptr);
++
++}  // namespace browse_new_space
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_NEW_SPACE_SHEET_H_
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_space_indicator_view.cc	2026-11-05 22:30:06.625062671 -0500
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc	2026-11-06 08:11:58.689268552 -0500
+@@ -45,6 +45,21 @@
+ #include "ui/gfx/color_utils.h"
+ #include "ui/gfx/paint_vector_icon.h"
+ #include "cc/paint/paint_shader.h"
++#include "cc/paint/paint_filter.h"
++#include "third_party/skia/include/core/SkPath.h"
++#include "third_party/skia/include/core/SkPathBuilder.h"
++#include "ui/gfx/geometry/transform.h"
++#include "base/values.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/tab_groups/tab_group_color.h"
++#include "components/tab_groups/tab_group_visual_data.h"
++#include "ui/compositor/layer.h"
++#include "ui/views/view_class_properties.h"
++#include "chrome/browser/ui/views/frame/browse_new_space_sheet.h"
++#include "components/prefs/pref_service.h"
++#include "components/prefs/scoped_user_pref_update.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include <CoreFoundation/CoreFoundation.h>
+@@ -55,6 +70,8 @@
+ namespace {
+ 
+ constexpr int kNewSpaceCommand = 1000;
++constexpr int kNewTabCommand = 1001;
++constexpr int kNewFolderCommand = 1002;
+ 
+ // Sort key that reproduces profile creation order: "Default", then
+ // "Profile 1", "Profile 2", ... Anything else goes last, by name.
+@@ -86,7 +103,16 @@
+     if (entry->IsOmitted() || entry->GetPath() == guest_path) {
+       continue;
+     }
+-    spaces.push_back({entry->GetPath(), entry->GetLocalProfileName()});
++    Space space{entry->GetPath(), entry->GetLocalProfileName()};
++    if (PrefService* local_state = g_browser_process->local_state()) {
++      if (const base::DictValue* style =
++              local_state->GetDict(kSpaceStylesPref)
++                  .FindDict(entry->GetPath().BaseName().AsUTF8Unsafe())) {
++        space.icon = style->FindInt("icon").value_or(-1);
++        space.gradient = style->FindInt("gradient").value_or(-1);
++      }
++    }
++    spaces.push_back(std::move(space));
+   }
+   std::stable_sort(spaces.begin(), spaces.end(),
+                    [](const Space& a, const Space& b) {
+@@ -127,7 +153,50 @@
+ }
+ }  // namespace
+ 
++int SpaceIconChoiceCount() {
++  return 10;
++}
++
++const gfx::VectorIcon& SpaceIconChoice(int choice) {
++  static constexpr const gfx::VectorIcon* kChoices[] = {
++      &kPersonFilledIcon,       &kMenuBookIcon,
++      &vector_icons::kMicIcon,  &kCodeIcon,
++      &kHomeIcon,               &vector_icons::kFamilyLinkIcon,
++      &vector_icons::kWorkIcon, &kGlobeIcon,
++      &vector_icons::kLightbulbIcon, &kRocketLaunchIcon};
++  static_assert(std::size(kChoices) == 10);
++  return *kChoices[static_cast<size_t>(std::max(choice, 0)) %
++                   std::size(kChoices)];
++}
++
++int GradientCount() {
++  return static_cast<int>(std::size(kGradients));
++}
++
++void SetSpaceStyle(const base::FilePath& path, int icon, int gradient) {
++  PrefService* local_state = g_browser_process->local_state();
++  if (!local_state) {
++    return;
++  }
++  ScopedDictPrefUpdate update(local_state, kSpaceStylesPref);
++  base::DictValue style;
++  style.Set("icon", icon);
++  style.Set("gradient", gradient);
++  update->Set(path.BaseName().AsUTF8Unsafe(), std::move(style));
++}
++
++int GradientFor(const std::vector<Space>& spaces, int index) {
++  if (index >= 0 && index < static_cast<int>(spaces.size()) &&
++      spaces[index].gradient >= 0) {
++    return spaces[index].gradient;
++  }
++  return index;
++}
++
+ const gfx::VectorIcon& IconForSpace(const Space& space, int index) {
++  if (space.icon >= 0) {
++    return SpaceIconChoice(space.icon);
++  }
+   const std::u16string name = base::ToLowerASCII(space.name);
+   auto has = [&](const char16_t* word) {
+     return name.find(word) != std::u16string::npos;
+@@ -176,8 +245,13 @@
+     return;
+   }
+   views::Widget* widget = from->GetWidget();
+-  const bool keep_frame = !widget->IsFullscreen() && !widget->IsMinimized();
+-  const gfx::Rect frame = widget->GetWindowBoundsInScreen();
++  OpenSpaceInFrame(path, !widget->IsFullscreen() && !widget->IsMinimized(),
++                   widget->GetWindowBoundsInScreen());
++}
++
++void OpenSpaceInFrame(const base::FilePath& path,
++                      bool keep_frame,
++                      const gfx::Rect& frame) {
+   profiles::SwitchToProfile(
+       path, /*always_create=*/false,
+       base::BindOnce(
+@@ -250,6 +324,87 @@
+ // horizontally-dominant trackpad scrolls are consumed; everything else passes
+ // through untouched. Scrolls over web contents never reach views, so page
+ // back/forward swipes are unaffected.
++namespace {
++
++// Round white "+" with a ring that fills while swiping past the last space.
++class BrowsePlusRingView : public views::View {
++  METADATA_HEADER(BrowsePlusRingView, views::View)
++
++ public:
++  static constexpr int kSize = 40;
++
++  BrowsePlusRingView() {
++    SetPaintToLayer();
++    layer()->SetFillsBoundsOpaquely(false);
++    layer()->SetOpacity(0.f);
++    SetProperty(views::kViewIgnoredByLayoutKey, true);
++    SetCanProcessEventsWithinSubtree(false);
++    GetViewAccessibility().SetIsIgnored(true);
++  }
++
++  void SetState(float progress, SkColor start, SkColor end) {
++    progress_ = std::clamp(progress, 0.f, 1.f);
++    start_ = start;
++    end_ = end;
++    layer()->SetOpacity(std::min(1.f, progress_ * 2.5f));
++    gfx::Transform scale;
++    const float s = 0.8f + 0.2f * std::min(1.f, progress_ * 1.5f);
++    scale.Translate(kSize / 2.f, kSize / 2.f);
++    scale.Scale(s, s);
++    scale.Translate(-kSize / 2.f, -kSize / 2.f);
++    layer()->SetTransform(scale);
++    SchedulePaint();
++  }
++
++  void OnPaint(gfx::Canvas* canvas) override {
++    const gfx::PointF c(kSize / 2.f, kSize / 2.f);
++    constexpr float kRadius = 14.f;
++    cc::PaintFlags shadow;
++    shadow.setAntiAlias(true);
++    shadow.setColor(SkColorSetA(SK_ColorBLACK, 0x30));
++    shadow.setImageFilter(sk_make_sp<cc::BlurPaintFilter>(
++        3.f, 3.f, SkTileMode::kDecal, nullptr));
++    canvas->DrawCircle(gfx::PointF(c.x(), c.y() + 1.5f), kRadius, shadow);
++    cc::PaintFlags fill;
++    fill.setAntiAlias(true);
++    fill.setColor(progress_ >= 1.f ? end_ : SK_ColorWHITE);
++    canvas->DrawCircle(c, kRadius, fill);
++
++    // Ring: fills clockwise from the top as the swipe goes on.
++    const SkPoint points[2] = {SkPoint::Make(0, 0), SkPoint::Make(kSize, kSize)};
++    const SkColor4f colors[2] = {SkColor4f::FromColor(start_),
++                                 SkColor4f::FromColor(end_)};
++    cc::PaintFlags ring;
++    ring.setAntiAlias(true);
++    ring.setStyle(cc::PaintFlags::kStroke_Style);
++    ring.setStrokeWidth(2.5f);
++    ring.setStrokeCap(cc::PaintFlags::kRound_Cap);
++    ring.setShader(cc::PaintShader::MakeLinearGradient(
++        points, colors, nullptr, 2, SkTileMode::kClamp));
++    SkPathBuilder arc_builder;
++    arc_builder.addArc(SkRect::MakeXYWH(c.x() - kRadius, c.y() - kRadius, 2 * kRadius,
++                                2 * kRadius),
++               -90.f, 360.f * progress_);
++    canvas->DrawPath(arc_builder.detach(), ring);
++
++    constexpr int kPlus = 16;
++    canvas->DrawImageInt(
++        gfx::CreateVectorIcon(kAddIcon, kPlus,
++                              progress_ >= 1.f ? SK_ColorWHITE : end_),
++        (kSize - kPlus) / 2, (kSize - kPlus) / 2);
++  }
++
++ private:
++  float progress_ = 0.f;
++  SkColor start_ = SK_ColorBLUE;
++  SkColor end_ = SK_ColorBLUE;
++};
++
++BEGIN_METADATA(BrowsePlusRingView)
++END_METADATA
++
++}  // namespace
++
+ class BrowseSpaceIndicatorView::SwipeHandler : public ui::EventHandler {
+  public:
+   explicit SwipeHandler(BrowseSpaceIndicatorView* owner) : owner_(owner) {}
+@@ -411,6 +566,10 @@
+   }
+   region_ = region;
+   region_->AddPreTargetHandler(swipe_handler_.get());
++  if (style_ == Style::kSidebar && !plus_ring_.view()) {
++    plus_ring_.SetView(
++        region_->AddChildView(std::make_unique<BrowsePlusRingView>()));
++  }
+ }
+ 
+ void BrowseSpaceIndicatorView::RefreshSpaces() {
+@@ -562,6 +721,7 @@
+   // The highlight glides from the current icon towards the target.
+   const float progress = std::clamp(swipe_progress(), -1.f, 1.f);
+   const int target = progress < 0 ? current_index_ + 1 : current_index_ - 1;
++  // target == count is the "+" (new space) slot past the last space.
+   const float t = (target >= 0 && target < count) ? std::abs(progress) : 0.f;
+   const float from_x = kSidebarLeft + current_index_ * (kSidebarCell + kSidebarGap);
+   const float to_x = kSidebarLeft + std::clamp(target, 0, count - 1) *
+@@ -575,8 +735,8 @@
+   canvas->DrawRoundRect(cell, 8, fill);
+ 
+   // Neon gradient underline under the highlighted icon.
+-  const int accent_index =
+-      t > 0.5f ? std::clamp(target, 0, count - 1) : current_index_;
++  const int accent_index = browse_spaces::GradientFor(
++      spaces_, t > 0.5f ? std::clamp(target, 0, count - 1) : current_index_);
+   const SkPoint points[2] = {SkPoint::Make(cell.x() + 9, 0),
+                              SkPoint::Make(cell.right() - 9, 0)};
+   const SkColor4f colors[2] = {
+@@ -617,15 +777,17 @@
+   canvas->ClipRect(name_area);
+   const int shift = std::lround(progress * name_area.width());
+   auto draw_name = [&](int index, int x_offset) {
+-    if (index < 0 || index >= count) {
++    if (index < 0 || index > count) {
+       return;
+     }
++    const std::u16string& label =
++        index == count ? std::u16string(u"New space") : spaces_[index].name;
+     gfx::Rect r = name_area;
+     r.Offset(x_offset, 0);
+     const float fade = 1.f - std::min(1.f, std::abs(x_offset) /
+                                                static_cast<float>(r.width()));
+     canvas->DrawStringRectWithFlags(
+-        spaces_[index].name, NameFont(),
++        label, NameFont(),
+         SkColorSetA(subtle, static_cast<U8CPU>(SkColorGetA(subtle) * fade)), r,
+         gfx::Canvas::TEXT_ALIGN_RIGHT | gfx::Canvas::NO_SUBPIXEL_RENDERING);
+   };
+@@ -651,7 +813,7 @@
+   // Rubber-band when there is no space in the swipe direction.
+   const bool towards_next = (swipe_offset_ + dx) < 0;
+   const bool has_neighbour =
+-      towards_next ? current_index_ + 1 < static_cast<int>(spaces_.size())
++      towards_next ? current_index_ + 1 <= static_cast<int>(spaces_.size())
+                    : current_index_ > 0;
+   swipe_offset_ += has_neighbour ? dx : dx * kEdgeResistance;
+   swipe_offset_ = std::clamp(swipe_offset_, -kSwipeDistance, kSwipeDistance);
+@@ -663,9 +825,28 @@
+     flick_velocity_ = 0.6f * (dx / dt) + 0.4f * flick_velocity_;
+   }
+   last_dx_time_ = now;
++  UpdatePlusRing();
+   SchedulePaint();
+ }
+ 
++void BrowseSpaceIndicatorView::UpdatePlusRing() {
++  auto* ring = static_cast<BrowsePlusRingView*>(plus_ring_.view());
++  if (!ring || !region_) {
++    return;
++  }
++  const bool at_last =
++      current_index_ == static_cast<int>(spaces_.size()) - 1;
++  const float over =
++      at_last ? std::max(0.f, -swipe_progress()) / kCommitThreshold : 0.f;
++  ring->SetBounds(region_->width() - BrowsePlusRingView::kSize - 10,
++                  (region_->height() - BrowsePlusRingView::kSize) / 2,
++                  BrowsePlusRingView::kSize, BrowsePlusRingView::kSize);
++  const int slot = browse_spaces::GradientFor(
++      spaces_, static_cast<int>(spaces_.size()));
++  ring->SetState(over, browse_spaces::ColorForIndex(slot),
++                 browse_spaces::GradientEndForIndex(slot));
++}
++
+ void BrowseSpaceIndicatorView::OnSwipeEnd() {
+   const float progress = swipe_progress();
+   // Stale velocity (fingers paused before lifting) doesn't count as a flick.
+@@ -683,7 +864,11 @@
+     delta = -1;
+   }
+   const int target = current_index_ + delta;
+-  if (target < 0 || target >= static_cast<int>(spaces_.size())) {
++  if (target == static_cast<int>(spaces_.size())) {
++    // Swiped past the last space onto "+": spring back and offer a new one.
++    delta = 0;
++    browse_new_space::Show(browser_view_, region_);
++  } else if (target < 0 || target > static_cast<int>(spaces_.size())) {
+     delta = 0;
+   }
+ 
+@@ -698,6 +883,7 @@
+     const gfx::Animation* animation) {
+   swipe_offset_ = static_cast<float>(
+       animation->CurrentValueBetween(anim_from_, anim_to_));
++  UpdatePlusRing();
+   SchedulePaint();
+ }
+ 
+@@ -737,6 +923,8 @@
+     menu_model_->AddCheckItem(static_cast<int>(i), spaces_[i].name);
+   }
+   menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
++  menu_model_->AddItem(browse_spaces::kNewTabCommand, u"New tab");
++  menu_model_->AddItem(browse_spaces::kNewFolderCommand, u"New folder");
+   menu_model_->AddItem(browse_spaces::kNewSpaceCommand, u"New space\u2026");
+   menu_runner_ = std::make_unique<views::MenuRunner>(
+       menu_model_.get(), views::MenuRunner::HAS_MNEMONICS);
+@@ -750,9 +938,30 @@
+   if (command_id >= 0 && command_id < static_cast<int>(spaces_.size())) {
+     browse_spaces::SwitchToSpace(browser_view_, spaces_[command_id].path);
+   } else if (command_id == browse_spaces::kNewSpaceCommand) {
+-    ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+-        ProfilePicker::EntryPoint::kProfileMenuAddNewProfile));
++    browse_new_space::Show(browser_view_,
++                           style_ == Style::kSidebar ? region_.get() : nullptr);
++  } else if (command_id == browse_spaces::kNewTabCommand) {
++    chrome::ExecuteCommand(browser_view_->browser(), IDC_NEW_TAB);
++  } else if (command_id == browse_spaces::kNewFolderCommand) {
++    NewFolder();
++  }
++}
++
++void BrowseSpaceIndicatorView::NewFolder() {
++  // Folders are named tab groups: they're kept with the session and never
++  // touched by the automatic site grouping. Start one with the current tab.
++  TabStripModel* model = browser_view_->browser()->GetTabStripModel();
++  const int index = model->active_index();
++  if (index < 0 || model->IsTabPinned(index)) {
++    return;
++  }
++  if (model->GetTabGroupForTab(index)) {
++    model->RemoveFromGroup({index});
+   }
++  const tab_groups::TabGroupId group = model->AddToNewGroup({index});
++  model->ChangeTabGroupVisuals(
++      group, tab_groups::TabGroupVisualData(
++                 u"New folder", tab_groups::TabGroupColorId::kGrey, false));
+ }
+ 
+ bool BrowseSpaceIndicatorView::IsCommandIdChecked(int command_id) const {
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_space_indicator_view.h	2026-11-05 22:30:06.623939041 -0500
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.h	2026-11-06 08:09:12.992233805 -0500
+@@ -10,6 +10,7 @@
+ #include <vector>
+ 
+ #include "base/files/file_path.h"
++#include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/vector_icon_types.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
+@@ -22,6 +23,7 @@
+ #include "ui/gfx/animation/slide_animation.h"
+ #include "ui/menus/simple_menu_model.h"
+ #include "ui/views/controls/button/button.h"
++#include "ui/views/view_tracker.h"
+ 
+ class BrowseTabOrganizer;
+ class BrowserView;
+@@ -41,8 +43,24 @@
+ struct Space {
+   base::FilePath path;
+   std::u16string name;
++  int icon = -1;      // Chosen icon (SpaceIconChoice), or -1 for automatic.
++  int gradient = -1;  // Chosen gradient, or -1 for the index default.
+ };
+ 
++// Local State dictionary of per-space style choices, keyed by profile
++// directory name: {"icon": int, "gradient": int}.
++inline constexpr char kSpaceStylesPref[] = "browse.space_styles";
++
++// Icons offered when creating a space.
++int SpaceIconChoiceCount();
++const gfx::VectorIcon& SpaceIconChoice(int choice);
++// Number of neon gradients in the palette.
++int GradientCount();
++// Remembers the icon/gradient chosen for the space at `path`.
++void SetSpaceStyle(const base::FilePath& path, int icon, int gradient);
++// Gradient slot for spaces[index]: its chosen gradient, else its index.
++int GradientFor(const std::vector<Space>& spaces, int index);
++
+ // All user-visible profiles, in creation order (Default, Profile 1, ...).
+ std::vector<Space> GetSpaces();
+ 
+@@ -62,6 +80,11 @@
+ // opening a new window there if the profile has none.
+ void SwitchToSpace(BrowserView* from, const base::FilePath& path);
+ 
++// Opens (or brings forward) `path`'s window, optionally in `frame`.
++void OpenSpaceInFrame(const base::FilePath& path,
++                      bool keep_frame,
++                      const gfx::Rect& frame);
++
+ }  // namespace browse_spaces
+ 
+ class BrowseSpaceIndicatorView : public views::Button,
+@@ -123,6 +146,8 @@
+   void PaintSidebar(gfx::Canvas* canvas);
+   int SidebarIconIndexAt(int x) const;
+   void SwitchBy(int delta);
++  void UpdatePlusRing();
++  void NewFolder();
+ 
+   // Swipe state. `swipe_offset_` is in DIPs; positive means the content has
+   // moved towards the trailing side (i.e. the previous space is sliding in).
+@@ -133,6 +158,9 @@
+ 
+   raw_ptr<BrowserView> browser_view_;
+   raw_ptr<views::View> region_ = nullptr;
++  // Arc-style round "+" shown on the sidebar while swiping past the last
++  // space. Owned by `region_`.
++  views::ViewTracker plus_ring_;
+   std::unique_ptr<SwipeHandler> swipe_handler_;
+ 
+   std::vector<browse_spaces::Space> spaces_;

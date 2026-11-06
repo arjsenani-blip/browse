@@ -1,0 +1,828 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn	2026-11-05 06:13:59.398484180 -0500
++++ src/chrome/browser/ui/BUILD.gn	2026-11-05 06:14:16.637934556 -0500
+@@ -3551,6 +3551,8 @@
+   if (toolkit_views) {
+     sources += [
+       "views/frame/base_tab_strip_region_view.cc",
++      "views/frame/browse_space_indicator_view.cc",
++      "views/frame/browse_space_indicator_view.h",
+       "views/frame/base_tab_strip_region_view.h",
+       "views/frame/browser_view.cc",
+       "views/frame/horizontal_tab_strip_region_view.cc",
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc	2026-11-05 21:58:53.971819788 -0500
+@@ -0,0 +1,584 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
++
++#include <algorithm>
++#include <cmath>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
++#include "cc/paint/paint_flags.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_attributes_entry.h"
++#include "chrome/browser/profiles/profile_attributes_storage.h"
++#include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/browser/profiles/profile_window.h"
++#include "chrome/browser/ui/profiles/profile_picker.h"
++#include "ui/base/models/menu_separator_types.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "ui/base/base_window.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/mojom/menu_source_type.mojom.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
++#include "ui/events/event.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/color_utils.h"
++#include "ui/gfx/font_list.h"
++#include "ui/gfx/text_utils.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/controls/menu/menu_runner.h"
++#include "ui/views/view_utils.h"
++#include "ui/views/widget/widget.h"
++
++#if BUILDFLAG(IS_MAC)
++#include <CoreFoundation/CoreFoundation.h>
++#endif
++
++namespace browse_spaces {
++
++namespace {
++
++constexpr int kNewSpaceCommand = 1000;
++
++// Sort key that reproduces profile creation order: "Default", then
++// "Profile 1", "Profile 2", ... Anything else goes last, by name.
++int ProfileDirOrder(const base::FilePath& path) {
++  const std::string base = path.BaseName().MaybeAsASCII();
++  if (base == "Default") {
++    return 0;
++  }
++  constexpr char kPrefix[] = "Profile ";
++  int n = 0;
++  if (base::StartsWith(base, kPrefix) &&
++      base::StringToInt(base.substr(sizeof(kPrefix) - 1), &n)) {
++    return n;
++  }
++  return 1 << 20;
++}
++
++}  // namespace
++
++std::vector<Space> GetSpaces() {
++  std::vector<Space> spaces;
++  ProfileManager* manager = g_browser_process->profile_manager();
++  if (!manager) {
++    return spaces;
++  }
++  const base::FilePath guest_path = ProfileManager::GetGuestProfilePath();
++  for (ProfileAttributesEntry* entry :
++       manager->GetProfileAttributesStorage().GetAllProfilesAttributes()) {
++    if (entry->IsOmitted() || entry->GetPath() == guest_path) {
++      continue;
++    }
++    spaces.push_back({entry->GetPath(), entry->GetLocalProfileName()});
++  }
++  std::stable_sort(spaces.begin(), spaces.end(),
++                   [](const Space& a, const Space& b) {
++                     const int oa = ProfileDirOrder(a.path);
++                     const int ob = ProfileDirOrder(b.path);
++                     return oa != ob ? oa < ob : a.name < b.name;
++                   });
++  return spaces;
++}
++
++int IndexOfProfile(const std::vector<Space>& spaces, Profile* profile) {
++  if (!profile) {
++    return -1;
++  }
++  const base::FilePath path = profile->GetOriginalProfile()->GetPath();
++  for (size_t i = 0; i < spaces.size(); ++i) {
++    if (spaces[i].path == path) {
++      return static_cast<int>(i);
++    }
++  }
++  return -1;
++}
++
++SkColor ColorForIndex(int index) {
++  static constexpr SkColor kPalette[] = {
++      SkColorSetRGB(0x22, 0xD3, 0xEE),  // cyan
++      SkColorSetRGB(0xA7, 0x8B, 0xFA),  // violet
++      SkColorSetRGB(0x34, 0xD3, 0x99),  // green
++      SkColorSetRGB(0x60, 0xA5, 0xFA),  // blue
++      SkColorSetRGB(0xF4, 0x72, 0xB6),  // pink
++      SkColorSetRGB(0xFB, 0x92, 0x3C),  // orange
++      SkColorSetRGB(0xF2, 0xC9, 0x4C),  // gold
++      SkColorSetRGB(0x2D, 0xD4, 0xBF),  // teal
++  };
++  if (index < 0) {
++    index = 0;
++  }
++  return kPalette[index % std::size(kPalette)];
++}
++
++void SwitchToSpace(BrowserView* from, const base::FilePath& path) {
++  if (!from || !from->GetWidget()) {
++    return;
++  }
++  Profile* current = from->browser()->GetProfile()->GetOriginalProfile();
++  if (current->GetPath() == path) {
++    return;
++  }
++  views::Widget* widget = from->GetWidget();
++  const bool keep_frame = !widget->IsFullscreen() && !widget->IsMinimized();
++  const gfx::Rect frame = widget->GetWindowBoundsInScreen();
++  profiles::SwitchToProfile(
++      path, /*always_create=*/false,
++      base::BindOnce(
++          [](bool keep_frame, gfx::Rect frame, BrowserWindowInterface* target) {
++            if (!target || !target->GetWindow()) {
++              return;
++            }
++            ui::BaseWindow* window = target->GetWindow();
++            if (keep_frame && !window->IsFullscreen()) {
++              if (window->IsMinimized()) {
++                window->Restore();
++              }
++              window->SetBounds(frame);
++            }
++            window->Activate();
++          },
++          keep_frame, frame));
++}
++
++}  // namespace browse_spaces
++
++namespace {
++
++// Full swipe distance (DIPs of finger travel) that maps to one space.
++constexpr float kSwipeDistance = 160.f;
++// Swipes past this fraction of kSwipeDistance commit on release.
++constexpr float kCommitThreshold = 0.5f;
++// A flick faster than this (DIPs/s) commits once past kFlickMinProgress.
++constexpr float kFlickVelocity = 700.f;
++constexpr float kFlickMinProgress = 0.08f;
++// Resistance when swiping past the first/last space.
++constexpr float kEdgeResistance = 0.3f;
++
++constexpr int kHorizontalPadding = 8;
++constexpr int kMinWidth = 44;
++constexpr int kDotDiameter = 4;
++constexpr int kDotGap = 4;
++constexpr int kNameDotGap = 3;
++
++const gfx::FontList& NameFont() {
++  static const base::NoDestructor<gfx::FontList> font(
++      gfx::FontList().DeriveWithSizeDelta(-2).DeriveWithWeight(
++          gfx::Font::Weight::MEDIUM));
++  return *font;
++}
++
++// Whether macOS "natural" scrolling is on. Trackpad deltas follow the content
++// when it is, so fingers-left arrives as a negative x delta.
++bool IsNaturalScrolling() {
++#if BUILDFLAG(IS_MAC)
++  Boolean valid = false;
++  const Boolean natural = CFPreferencesGetAppBooleanValue(
++      CFSTR("com.apple.swipescrolldirection"), kCFPreferencesAnyApplication,
++      &valid);
++  return valid ? natural : true;
++#else
++  return true;
++#endif
++}
++
++}  // namespace
++
++// Watches scroll events delivered to the tab strip region (and its children)
++// before they reach their targets. Only phase-tagged, non-momentum,
++// horizontally-dominant trackpad scrolls are consumed; everything else passes
++// through untouched. Scrolls over web contents never reach views, so page
++// back/forward swipes are unaffected.
++class BrowseSpaceIndicatorView::SwipeHandler : public ui::EventHandler {
++ public:
++  explicit SwipeHandler(BrowseSpaceIndicatorView* owner) : owner_(owner) {}
++
++  void OnScrollEvent(ui::ScrollEvent* event) override {
++    if (event->type() != ui::EventType::kScroll) {
++      if (consumed_) {
++        event->SetHandled();
++      }
++      return;
++    }
++
++    // On Mac, ui::ScrollEvent leaves scroll_event_phase() as kNone and packs
++    // the trackpad phase into momentum_phase(): MAY_BEGIN = fingers down,
++    // NONE = fingers moving, END = fingers lifted (or momentum/wheel end),
++    // INERTIAL_UPDATE = momentum after lift.
++    const ui::EventMomentumPhase phase = event->momentum_phase();
++
++    if (phase == ui::EventMomentumPhase::INERTIAL_UPDATE) {
++      if (consumed_) {
++        event->SetHandled();
++      }
++      return;
++    }
++
++    float dx = event->x_offset();
++    float dy = event->y_offset();
++    if (!IsNaturalScrolling()) {
++      dx = -dx;
++      dy = -dy;
++    }
++
++    if (phase == ui::EventMomentumPhase::MAY_BEGIN) {
++      tracking_ = true;
++      decided_ = false;
++      consumed_ = false;
++      acc_x_ = dx;
++      acc_y_ = dy;
++      return;
++    }
++
++    if (phase == ui::EventMomentumPhase::END) {
++      if (tracking_) {
++        tracking_ = false;
++        if (consumed_) {
++          owner_->OnSwipeEnd();
++          event->SetHandled();
++          // `consumed_` stays set so trailing momentum is swallowed; it is
++          // reset when the next gesture begins.
++        }
++      } else if (consumed_) {
++        event->SetHandled();  // Momentum end of our own gesture.
++      }
++      return;
++    }
++
++    // phase == NONE: fingers moving.
++    if (!tracking_) {
++      return;
++    }
++    if (!decided_) {
++      acc_x_ += dx;
++      acc_y_ += dy;
++      if (std::abs(acc_x_) + std::abs(acc_y_) < 4.f) {
++        return;
++      }
++      decided_ = true;
++      consumed_ = std::abs(acc_x_) > std::abs(acc_y_) * 1.2f;
++      if (consumed_) {
++        owner_->OnSwipeBegin();
++        owner_->OnSwipeUpdate(acc_x_);
++      }
++    } else if (consumed_) {
++      owner_->OnSwipeUpdate(dx);
++    }
++    if (consumed_) {
++      event->SetHandled();
++    }
++  }
++
++ private:
++  raw_ptr<BrowseSpaceIndicatorView> owner_;
++  bool tracking_ = false;
++  bool decided_ = false;
++  bool consumed_ = false;
++  float acc_x_ = 0;
++  float acc_y_ = 0;
++};
++
++// Forwards settle-animation callbacks; views::Button already is an
++// AnimationDelegate (for hover), so the indicator can't be one directly.
++class BrowseSpaceIndicatorView::SettleDelegate : public gfx::AnimationDelegate {
++ public:
++  explicit SettleDelegate(BrowseSpaceIndicatorView* owner) : owner_(owner) {}
++  void AnimationProgressed(const gfx::Animation* animation) override {
++    owner_->OnSettleProgressed(animation);
++  }
++  void AnimationEnded(const gfx::Animation* animation) override {
++    owner_->OnSettleEnded();
++  }
++
++ private:
++  raw_ptr<BrowseSpaceIndicatorView> owner_;
++};
++
++BrowseSpaceIndicatorView::BrowseSpaceIndicatorView(BrowserView* browser_view)
++    : views::Button(base::BindRepeating(&BrowseSpaceIndicatorView::OnPressed,
++                                        base::Unretained(this))),
++      browser_view_(browser_view),
++      swipe_handler_(std::make_unique<SwipeHandler>(this)),
++      settle_delegate_(std::make_unique<SettleDelegate>(this)),
++      settle_animation_(
++          std::make_unique<gfx::SlideAnimation>(settle_delegate_.get())) {
++  settle_animation_->SetSlideDuration(base::Milliseconds(180));
++  if (ProfileManager* manager = g_browser_process->profile_manager()) {
++    storage_observation_.Observe(&manager->GetProfileAttributesStorage());
++  }
++  settle_animation_->SetTweenType(gfx::Tween::EASE_OUT);
++  SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
++  RefreshSpaces();
++}
++
++BrowseSpaceIndicatorView::~BrowseSpaceIndicatorView() {
++  if (region_) {
++    region_->RemovePreTargetHandler(swipe_handler_.get());
++  }
++}
++
++// static
++bool BrowseSpaceIndicatorView::ShouldShowFor(BrowserView* browser_view) {
++  if (!browser_view || !browser_view->browser()) {
++    return false;
++  }
++  BrowserWindowInterface* browser = browser_view->browser();
++  return browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
++         !browser->GetProfile()->IsOffTheRecord();
++}
++
++// static
++int BrowseSpaceIndicatorView::LeadingWidthFor(const views::View* region) {
++  for (const views::View* child : region->children()) {
++    if (const auto* indicator =
++            views::AsViewClass<BrowseSpaceIndicatorView>(child)) {
++      return indicator->GetVisible() ? indicator->width() : 0;
++    }
++  }
++  return 0;
++}
++
++void BrowseSpaceIndicatorView::AttachSwipeHandlerTo(views::View* region) {
++  if (region_) {
++    region_->RemovePreTargetHandler(swipe_handler_.get());
++  }
++  region_ = region;
++  region_->AddPreTargetHandler(swipe_handler_.get());
++}
++
++void BrowseSpaceIndicatorView::RefreshSpaces() {
++  spaces_ = browse_spaces::GetSpaces();
++  current_index_ = browse_spaces::IndexOfProfile(
++      spaces_, browser_view_->browser()->GetProfile());
++  const std::u16string name = current_index_ >= 0
++                                  ? spaces_[current_index_].name
++                                  : std::u16string(u"Spaces");
++  GetViewAccessibility().SetName(name);
++  SetTooltipText(name);
++  PreferredSizeChanged();
++  SchedulePaint();
++}
++
++void BrowseSpaceIndicatorView::OnProfileAdded(const base::FilePath&) {
++  RefreshSpaces();
++}
++
++void BrowseSpaceIndicatorView::OnProfileWasRemoved(const base::FilePath&,
++                                                   const std::u16string&) {
++  RefreshSpaces();
++}
++
++void BrowseSpaceIndicatorView::OnProfileNameChanged(const base::FilePath&,
++                                                    const std::u16string&) {
++  RefreshSpaces();
++}
++
++void BrowseSpaceIndicatorView::OnProfileIsOmittedChanged(
++    const base::FilePath&) {
++  RefreshSpaces();
++}
++
++gfx::Size BrowseSpaceIndicatorView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  int width = kMinWidth;
++  for (const auto& space : spaces_) {
++    width = std::max(width, gfx::GetStringWidth(space.name, NameFont()) +
++                                2 * kHorizontalPadding);
++  }
++  const int dots = static_cast<int>(spaces_.size());
++  width = std::max(width, dots * kDotDiameter + (dots - 1) * kDotGap +
++                              2 * kHorizontalPadding);
++  return gfx::Size(width, NameFont().GetHeight() + kNameDotGap + kDotDiameter);
++}
++
++float BrowseSpaceIndicatorView::swipe_progress() const {
++  return swipe_offset_ / kSwipeDistance;
++}
++
++void BrowseSpaceIndicatorView::PaintButtonContents(gfx::Canvas* canvas) {
++  if (spaces_.empty() || current_index_ < 0) {
++    return;
++  }
++  const ui::ColorProvider* cp = GetColorProvider();
++  const SkColor text_color = cp->GetColor(ui::kColorSysOnSurfaceSubtle);
++
++  const gfx::Rect bounds = GetLocalBounds();
++  const int content_height =
++      NameFont().GetHeight() + kNameDotGap + kDotDiameter;
++  const int top = bounds.y() + (bounds.height() - content_height) / 2;
++  const gfx::Rect name_row(0, top, bounds.width(), NameFont().GetHeight());
++
++  // Names: the current one follows the fingers, the neighbour slides in.
++  const float progress = std::clamp(swipe_progress(), -1.f, 1.f);
++  const int shift = std::lround(progress * bounds.width());
++  canvas->Save();
++  canvas->ClipRect(bounds);
++  auto draw_name = [&](int index, int x_offset) {
++    if (index < 0 || index >= static_cast<int>(spaces_.size())) {
++      return;
++    }
++    gfx::Rect r = name_row;
++    r.Offset(x_offset, 0);
++    const float fade = 1.f - std::min(1.f, std::abs(x_offset) /
++                                               static_cast<float>(
++                                                   std::max(1, r.width())));
++    canvas->DrawStringRectWithFlags(
++        spaces_[index].name, NameFont(),
++        SkColorSetA(text_color,
++                    static_cast<U8CPU>(SkColorGetA(text_color) * fade)),
++        r, gfx::Canvas::TEXT_ALIGN_CENTER | gfx::Canvas::NO_SUBPIXEL_RENDERING);
++  };
++  draw_name(current_index_, shift);
++  if (shift < 0) {
++    draw_name(current_index_ + 1, shift + bounds.width());
++  } else if (shift > 0) {
++    draw_name(current_index_ - 1, shift - bounds.width());
++  }
++  canvas->Restore();
++
++  // Dots: the highlight moves towards the target as the swipe progresses.
++  const int count = static_cast<int>(spaces_.size());
++  const int dots_width = count * kDotDiameter + (count - 1) * kDotGap;
++  int x = (bounds.width() - dots_width) / 2;
++  const int y = name_row.bottom() + kNameDotGap;
++  const int target = progress < 0 ? current_index_ + 1 : current_index_ - 1;
++  const float t = std::abs(progress);
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  for (int i = 0; i < count; ++i) {
++    float emphasis = 0.f;
++    if (i == current_index_) {
++      emphasis = 1.f - t;
++    } else if (i == target) {
++      emphasis = t;
++    }
++    const float alpha = 0.28f + 0.72f * emphasis;
++    flags.setColor(SkColorSetA(text_color, static_cast<U8CPU>(255 * alpha)));
++    canvas->DrawCircle(gfx::PointF(x + kDotDiameter / 2.f,
++                                   y + kDotDiameter / 2.f),
++                       kDotDiameter / 2.f, flags);
++    x += kDotDiameter + kDotGap;
++  }
++}
++
++void BrowseSpaceIndicatorView::OnSwipeBegin() {
++  settle_animation_->Stop();
++  RefreshSpaces();
++  swipe_offset_ = 0;
++  flick_velocity_ = 0;
++  last_dx_time_ = base::TimeTicks::Now();
++  pending_switch_delta_ = 0;
++}
++
++void BrowseSpaceIndicatorView::OnSwipeUpdate(float dx) {
++  // Rubber-band when there is no space in the swipe direction.
++  const bool towards_next = (swipe_offset_ + dx) < 0;
++  const bool has_neighbour =
++      towards_next ? current_index_ + 1 < static_cast<int>(spaces_.size())
++                   : current_index_ > 0;
++  swipe_offset_ += has_neighbour ? dx : dx * kEdgeResistance;
++  swipe_offset_ = std::clamp(swipe_offset_, -kSwipeDistance, kSwipeDistance);
++
++  const base::TimeTicks now = base::TimeTicks::Now();
++  const float dt = (now - last_dx_time_).InSecondsF();
++  if (dt > 0) {
++    // Light smoothing so a single noisy sample doesn't decide a flick.
++    flick_velocity_ = 0.6f * (dx / dt) + 0.4f * flick_velocity_;
++  }
++  last_dx_time_ = now;
++  SchedulePaint();
++}
++
++void BrowseSpaceIndicatorView::OnSwipeEnd() {
++  const float progress = swipe_progress();
++  // Stale velocity (fingers paused before lifting) doesn't count as a flick.
++  const bool recent =
++      (base::TimeTicks::Now() - last_dx_time_) < base::Milliseconds(80);
++  const bool flick_next = recent && flick_velocity_ < -kFlickVelocity &&
++                          progress < -kFlickMinProgress;
++  const bool flick_prev = recent && flick_velocity_ > kFlickVelocity &&
++                          progress > kFlickMinProgress;
++
++  int delta = 0;
++  if (progress <= -kCommitThreshold || flick_next) {
++    delta = 1;  // fingers moved left: next space
++  } else if (progress >= kCommitThreshold || flick_prev) {
++    delta = -1;
++  }
++  const int target = current_index_ + delta;
++  if (target < 0 || target >= static_cast<int>(spaces_.size())) {
++    delta = 0;
++  }
++
++  pending_switch_delta_ = delta;
++  anim_from_ = swipe_offset_;
++  anim_to_ = delta == 0 ? 0.f : -delta * kSwipeDistance;
++  settle_animation_->Reset(0);
++  settle_animation_->Show();
++}
++
++void BrowseSpaceIndicatorView::OnSettleProgressed(
++    const gfx::Animation* animation) {
++  swipe_offset_ = static_cast<float>(
++      animation->CurrentValueBetween(anim_from_, anim_to_));
++  SchedulePaint();
++}
++
++void BrowseSpaceIndicatorView::OnSettleEnded() {
++  const int delta = pending_switch_delta_;
++  pending_switch_delta_ = 0;
++  if (delta != 0) {
++    SwitchBy(delta);
++  }
++  // This window now sits behind the target space's window; reset quietly.
++  swipe_offset_ = 0;
++  SchedulePaint();
++}
++
++void BrowseSpaceIndicatorView::SwitchBy(int delta) {
++  const int target = current_index_ + delta;
++  if (target < 0 || target >= static_cast<int>(spaces_.size())) {
++    return;
++  }
++  browse_spaces::SwitchToSpace(browser_view_, spaces_[target].path);
++}
++
++void BrowseSpaceIndicatorView::OnPressed() {
++  RefreshSpaces();
++  menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
++  for (size_t i = 0; i < spaces_.size(); ++i) {
++    menu_model_->AddCheckItem(static_cast<int>(i), spaces_[i].name);
++  }
++  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
++  menu_model_->AddItem(browse_spaces::kNewSpaceCommand, u"New space\u2026");
++  menu_runner_ = std::make_unique<views::MenuRunner>(
++      menu_model_.get(), views::MenuRunner::HAS_MNEMONICS);
++  menu_runner_->RunMenuAt(GetWidget(), nullptr, GetBoundsInScreen(),
++                          views::MenuAnchorPosition::kTopLeft,
++                          ui::mojom::MenuSourceType::kMouse);
++}
++
++void BrowseSpaceIndicatorView::ExecuteCommand(int command_id,
++                                              int event_flags) {
++  if (command_id >= 0 && command_id < static_cast<int>(spaces_.size())) {
++    browse_spaces::SwitchToSpace(browser_view_, spaces_[command_id].path);
++  } else if (command_id == browse_spaces::kNewSpaceCommand) {
++    ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
++        ProfilePicker::EntryPoint::kProfileMenuAddNewProfile));
++  }
++}
++
++bool BrowseSpaceIndicatorView::IsCommandIdChecked(int command_id) const {
++  return command_id == current_index_;
++}
++
++BEGIN_METADATA(BrowseSpaceIndicatorView)
++END_METADATA
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.h	2026-11-05 21:53:24.421886980 -0500
+@@ -0,0 +1,144 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_SPACE_INDICATOR_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_SPACE_INDICATOR_VIEW_H_
++
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/files/file_path.h"
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/profiles/profile_attributes_storage.h"
++#include "chrome/browser/profiles/profile_attributes_storage_observer.h"
++#include "base/time/time.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/events/event_handler.h"
++#include "ui/gfx/animation/animation_delegate.h"
++#include "ui/gfx/animation/slide_animation.h"
++#include "ui/menus/simple_menu_model.h"
++#include "ui/views/controls/button/button.h"
++
++class BrowserView;
++class Profile;
++
++namespace views {
++class MenuRunner;
++}
++
++// Browse: Dia-style "spaces". A space is a regular Chromium profile. This
++// view sits at the leading edge of the horizontal tab strip (right after the
++// traffic lights) and shows the current space's name with one dot per space.
++// A two-finger horizontal swipe anywhere on the tab strip region moves to the
++// previous/next space; clicking opens a menu of spaces.
++namespace browse_spaces {
++
++struct Space {
++  base::FilePath path;
++  std::u16string name;
++};
++
++// All user-visible profiles, in creation order (Default, Profile 1, ...).
++std::vector<Space> GetSpaces();
++
++// Index of `profile` in `spaces`, or -1.
++int IndexOfProfile(const std::vector<Space>& spaces, Profile* profile);
++
++// Default palette, picked by space index.
++SkColor ColorForIndex(int index);
++
++// Brings `path`'s window to the front in exactly `from`'s window frame,
++// opening a new window there if the profile has none.
++void SwitchToSpace(BrowserView* from, const base::FilePath& path);
++
++}  // namespace browse_spaces
++
++class BrowseSpaceIndicatorView : public views::Button,
++                                 public ui::SimpleMenuModel::Delegate,
++                                 public ProfileAttributesStorageObserver {
++  METADATA_HEADER(BrowseSpaceIndicatorView, views::Button)
++
++ public:
++  explicit BrowseSpaceIndicatorView(BrowserView* browser_view);
++  BrowseSpaceIndicatorView(const BrowseSpaceIndicatorView&) = delete;
++  BrowseSpaceIndicatorView& operator=(const BrowseSpaceIndicatorView&) =
++      delete;
++  ~BrowseSpaceIndicatorView() override;
++
++  // Whether a space indicator should be shown for this window at all
++  // (normal, non-incognito browser windows only).
++  static bool ShouldShowFor(BrowserView* browser_view);
++
++  // Width the tab strip region must reserve for this view (0 if hidden).
++  static int LeadingWidthFor(const views::View* region);
++
++  // Attaches the swipe handler to the tab strip region (our parent).
++  void AttachSwipeHandlerTo(views::View* region);
++
++  // views::Button:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  void PaintButtonContents(gfx::Canvas* canvas) override;
++
++  // ui::SimpleMenuModel::Delegate:
++  void ExecuteCommand(int command_id, int event_flags) override;
++  bool IsCommandIdChecked(int command_id) const override;
++
++  // ProfileAttributesStorageObserver:
++  void OnProfileAdded(const base::FilePath& profile_path) override;
++  void OnProfileWasRemoved(const base::FilePath& profile_path,
++                           const std::u16string& profile_name) override;
++  void OnProfileNameChanged(const base::FilePath& profile_path,
++                            const std::u16string& old_profile_name) override;
++  void OnProfileIsOmittedChanged(const base::FilePath& profile_path) override;
++
++
++ private:
++  class SwipeHandler;
++  friend class SwipeHandler;
++  class SettleDelegate;
++
++  void OnSettleProgressed(const gfx::Animation* animation);
++  void OnSettleEnded();
++
++  void RefreshSpaces();
++  void OnPressed();
++  void SwitchBy(int delta);
++
++  // Swipe state. `swipe_offset_` is in DIPs; positive means the content has
++  // moved towards the trailing side (i.e. the previous space is sliding in).
++  void OnSwipeBegin();
++  void OnSwipeUpdate(float dx);
++  void OnSwipeEnd();
++  float swipe_progress() const;
++
++  raw_ptr<BrowserView> browser_view_;
++  raw_ptr<views::View> region_ = nullptr;
++  std::unique_ptr<SwipeHandler> swipe_handler_;
++
++  std::vector<browse_spaces::Space> spaces_;
++  int current_index_ = -1;
++
++  float swipe_offset_ = 0;
++  float last_dx_ = 0;
++  base::TimeTicks last_dx_time_;
++  float flick_velocity_ = 0;  // DIPs per second, signed.
++
++  // Animates `swipe_offset_` from `anim_from_` to `anim_to_`.
++  std::unique_ptr<SettleDelegate> settle_delegate_;
++  std::unique_ptr<gfx::SlideAnimation> settle_animation_;
++  float anim_from_ = 0;
++  float anim_to_ = 0;
++  int pending_switch_delta_ = 0;
++
++  std::unique_ptr<ui::SimpleMenuModel> menu_model_;
++  std::unique_ptr<views::MenuRunner> menu_runner_;
++  base::ScopedObservation<ProfileAttributesStorage,
++                          ProfileAttributesStorageObserver>
++      storage_observation_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_SPACE_INDICATOR_VIEW_H_
+Index: src/chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.cc	2026-11-05 06:13:46.958088565 -0500
++++ src/chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.cc	2026-11-05 21:47:57.531779454 -0500
+@@ -24,6 +24,7 @@
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
+ #include "chrome/browser/ui/ui_features.h"
++#include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
+ #include "chrome/browser/ui/views/frame/themed_background.h"
+@@ -213,6 +214,14 @@
+   SetLayoutManager(std::make_unique<views::FlexLayout>())
+       ->SetOrientation(views::LayoutOrientation::kHorizontal);
+ 
++  if (BrowseSpaceIndicatorView::ShouldShowFor(browser_view)) {
++    auto* space_indicator = AddChildView(
++        std::make_unique<BrowseSpaceIndicatorView>(browser_view));
++    space_indicator->SetProperty(views::kCrossAxisAlignmentKey,
++                                 views::LayoutAlignment::kCenter);
++    space_indicator->AttachSwipeHandlerTo(this);
++  }
++
+   BrowserWindowInterface* const browser = browser_view->browser();
+ 
+   if (base::FeatureList::IsEnabled(features::kTabGroupsFocusing)) {
+@@ -365,6 +374,12 @@
+ 
+ views::View::Views HorizontalTabStripRegionViewOld::GetChildrenInZOrder() {
+   views::View::Views children;
++  // Browse: the space label sits underneath everything else.
++  for (views::View* child : this->children()) {
++    if (views::IsViewClass<BrowseSpaceIndicatorView>(child)) {
++      children.push_back(child);
++    }
++  }
+ 
+   if (tab_strip_) {
+     children.emplace_back(tab_strip_.get());
+@@ -419,7 +434,7 @@
+   UpdateTabStripMargin();
+   LayoutSuperclass<views::AccessiblePaneView>(this);
+ 
+-  int leading_offset = 0;
++  int leading_offset = BrowseSpaceIndicatorView::LeadingWidthFor(this);
+   if (unfocus_button_ && unfocus_button_->GetVisible()) {
+     AdjustViewBoundsRect(unfocus_button_, leading_offset);
+     leading_offset += unfocus_button_->GetPreferredSize().width() +
+@@ -826,6 +841,14 @@
+   SetLayoutManager(std::make_unique<views::FlexLayout>())
+       ->SetOrientation(views::LayoutOrientation::kHorizontal);
+ 
++  if (BrowseSpaceIndicatorView::ShouldShowFor(browser_view)) {
++    auto* space_indicator = AddChildView(
++        std::make_unique<BrowseSpaceIndicatorView>(browser_view));
++    space_indicator->SetProperty(views::kCrossAxisAlignmentKey,
++                                 views::LayoutAlignment::kCenter);
++    space_indicator->AttachSwipeHandlerTo(this);
++  }
++
+   BrowserWindowInterface* const browser = browser_view->browser();
+ 
+   std::unique_ptr<TabStripActionContainer> tab_strip_action_container;
+@@ -906,6 +929,12 @@
+ 
+ views::View::Views HorizontalTabStripRegionViewNew::GetChildrenInZOrder() {
+   views::View::Views children;
++  // Browse: the space label sits underneath everything else.
++  for (views::View* child : this->children()) {
++    if (views::IsViewClass<BrowseSpaceIndicatorView>(child)) {
++      children.push_back(child);
++    }
++  }
+   if (tab_strip_view()) {
+     children.emplace_back(tab_strip_view());
+   }

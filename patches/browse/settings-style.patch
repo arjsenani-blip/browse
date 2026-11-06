@@ -1,0 +1,50 @@
+Index: src/chrome/browser/resources/settings/settings.html
+===================================================================
+--- src.orig/chrome/browser/resources/settings/settings.html	2026-10-28 16:20:02.000000000 -0400
++++ src/chrome/browser/resources/settings/settings.html	2026-11-06 08:20:03.069255629 -0500
+@@ -34,6 +34,45 @@
+       background: var(--color-settings-webui-page-background);
+     }
+ 
++    /* Browse: calm, minimal settings that match the sidebar - soft grey page,
++     * white rounded cards with a whisper of shadow, quiet menu, blue accent.
++     * Only CSS variables, so every Settings component picks it up. */
++    @media (prefers-color-scheme: light) {
++      html {
++        --md-background-color: #f4f4f5 !important;
++        --color-webui-page-background: #f4f4f5 !important;
++        --color-settings-webui-page-background: #f4f4f5 !important;
++        --cr-card-background-color: #ffffff !important;
++        --color-webui-card-background: #ffffff !important;
++        --cr-card-border-radius: 14px !important;
++        --cr-card-shadow: 0 1px 2px rgba(0, 0, 0, .04),
++            0 6px 20px rgba(0, 0, 0, .04) !important;
++        --cr-separator-color: rgba(0, 0, 0, .05) !important;
++        --cr-primary-text-color: #18181b !important;
++        --cr-secondary-text-color: #71717a !important;
++        --cr-link-color: #3b82f6 !important;
++        --cr-checked-color: #3b82f6 !important;
++        --color-settings-nav-menu-item-background: #ffffff !important;
++        --color-settings-nav-menu-item-foreground: #52525b !important;
++        --color-settings-nav-menu-item-foreground-selected: #18181b !important;
++        --color-settings-nav-menu-item-icon: #a1a1aa !important;
++      }
++      html,
++      html[webui-refresh-2026],
++      html[settings-refresh-2026] {
++        background: #f4f4f5 !important;
++      }
++    }
++    @media (prefers-color-scheme: dark) {
++      html {
++        --cr-card-border-radius: 14px !important;
++      }
++    }
++    body {
++      font-family: system-ui, -apple-system, 'SF Pro Text', sans-serif;
++      -webkit-font-smoothing: antialiased;
++    }
++
+ <if expr="is_chromeos">
+     html[settings-refresh-2026] body {
+       font-family: 'Google Sans', Roboto, sans-serif;

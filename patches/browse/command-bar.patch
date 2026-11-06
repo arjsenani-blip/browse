@@ -1,0 +1,801 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn	2026-11-05 22:06:25.460414474 -0500
++++ src/chrome/browser/ui/BUILD.gn	2026-11-05 22:16:57.452786739 -0500
+@@ -3551,6 +3551,8 @@
+   if (toolkit_views) {
+     sources += [
+       "views/frame/base_tab_strip_region_view.cc",
++      "views/frame/browse_command_bar.cc",
++      "views/frame/browse_command_bar.h",
+       "views/frame/browse_loading_bar_view.cc",
+       "views/frame/browse_loading_bar_view.h",
+       "views/frame/browse_space_indicator_view.cc",
+Index: src/chrome/browser/ui/browser_command_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_command_controller.cc	2026-11-05 06:13:59.128241077 -0500
++++ src/chrome/browser/ui/browser_command_controller.cc	2026-11-05 22:16:57.454802440 -0500
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/browser_command_controller.h"
+ 
++#include "chrome/browser/ui/views/frame/browse_command_bar.h"
++
+ #include <stddef.h>
+ 
+ #include <algorithm>
+@@ -771,6 +773,10 @@
+       CloseWindow(browser_);
+       break;
+     case IDC_NEW_TAB: {
++      // Browse: Cmd+T opens the floating command bar instead of a new tab page.
++      if (browse_command_bar::Show(browser_)) {
++        break;
++      }
+       NewTab(browser_, NewTabTypes::kNewTabCommand);
+       break;
+     }
+Index: src/chrome/browser/ui/views/frame/browse_command_bar.cc
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_command_bar.cc	2026-11-05 22:17:55.495672045 -0500
+@@ -0,0 +1,732 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/browse_command_bar.h"
++
++#include <algorithm>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
++#include "base/scoped_observation.h"
++#include "base/task/cancelable_task_tracker.h"
++#include "base/task/sequenced_task_runner.h"
++#include "cc/paint/paint_filter.h"
++#include "cc/paint/paint_flags.h"
++#include "cc/paint/paint_shader.h"
++#include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
++#include "chrome/browser/autocomplete/chrome_autocomplete_provider_client.h"
++#include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "components/favicon/content/content_favicon_driver.h"
++#include "components/favicon/core/favicon_service.h"
++#include "components/keyed_service/core/service_access_type.h"
++#include "components/omnibox/browser/autocomplete_classifier.h"
++#include "components/omnibox/browser/autocomplete_controller.h"
++#include "components/omnibox/browser/autocomplete_input.h"
++#include "components/omnibox/browser/autocomplete_match.h"
++#include "components/omnibox/browser/autocomplete_result.h"
++#include "components/vector_icons/vector_icons.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/metrics_proto/omnibox_event.pb.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/models/image_model.h"
++#include "ui/base/window_open_disposition.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
++#include "ui/compositor/layer.h"
++#include "ui/compositor/scoped_layer_animation_settings.h"
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/color_utils.h"
++#include "ui/gfx/font_list.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/geometry/transform.h"
++#include "ui/gfx/image/image.h"
++#include "ui/gfx/image/image_skia_operations.h"
++#include "ui/gfx/paint_vector_icon.h"
++#include "ui/gfx/text_elider.h"
++#include "ui/gfx/text_utils.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/background.h"
++#include "ui/views/controls/button/button.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/controls/textfield/textfield_controller.h"
++#include "ui/views/view.h"
++#include "ui/views/widget/widget.h"
++#include "ui/views/widget/widget_observer.h"
++
++namespace browse_command_bar {
++namespace {
++
++constexpr int kCardMaxWidth = 620;
++constexpr int kCardSideMargin = 40;
++constexpr int kCardRadius = 14;
++constexpr int kFieldHeight = 54;
++constexpr int kRowHeight = 40;
++constexpr int kRowInset = 8;
++constexpr int kRowRadius = 9;
++constexpr int kIconSize = 16;
++constexpr int kMaxRows = 6;
++constexpr float kCardTopFraction = 0.24f;
++constexpr base::TimeDelta kAppearDuration = base::Milliseconds(150);
++
++const SkColor kCardColor = SK_ColorWHITE;
++const SkColor kTextColor = SkColorSetRGB(0x18, 0x18, 0x1B);
++const SkColor kSubtleText = SkColorSetRGB(0x71, 0x71, 0x7A);
++const SkColor kHairline = SkColorSetARGB(0x14, 0, 0, 0);
++
++// One suggestion row.
++struct Entry {
++  std::u16string title;
++  std::u16string action;  // "Switch to Tab", "Open", "Search".
++  ui::ImageModel icon;
++  GURL url;
++  ui::PageTransition transition = ui::PAGE_TRANSITION_TYPED;
++  int tab_index = -1;      // >= 0: activate this tab in the browser.
++  bool switch_to_tab = false;
++};
++
++class CommandBarView;
++
++// Clickable result row; paints itself so selection and hover stay cheap.
++class RowView : public views::Button {
++  METADATA_HEADER(RowView, views::Button)
++
++ public:
++  RowView(CommandBarView* owner, int index);
++  void SetEntry(const Entry& entry, bool selected, SkColor accent);
++  void PaintButtonContents(gfx::Canvas* canvas) override;
++  void OnMouseEntered(const ui::MouseEvent& event) override;
++
++ private:
++  raw_ptr<CommandBarView> owner_;
++  int index_;
++  Entry entry_;
++  bool selected_ = false;
++  SkColor accent_ = SK_ColorCYAN;
++};
++
++class CommandBarView : public views::View,
++                       public views::TextfieldController,
++                       public AutocompleteController::Observer {
++  METADATA_HEADER(CommandBarView, views::View)
++
++ public:
++  CommandBarView(BrowserWindowInterface* browser,
++                 base::OnceClosure close_callback);
++  ~CommandBarView() override;
++
++  void FocusField() { field_->RequestFocus(); }
++  void AnimateIn();
++  void Select(int index);
++  void Activate(int index);
++  void Close();
++
++  // views::View:
++  void Layout(PassKey) override;
++  void OnPaint(gfx::Canvas* canvas) override;
++  bool OnMousePressed(const ui::MouseEvent& event) override;
++
++  // views::TextfieldController:
++  void ContentsChanged(views::Textfield* sender,
++                       const std::u16string& new_contents) override;
++  bool HandleKeyEvent(views::Textfield* sender,
++                      const ui::KeyEvent& key_event) override;
++
++  // AutocompleteController::Observer:
++  void OnResultChanged(AutocompleteController* controller,
++                       bool default_match_changed) override;
++
++ private:
++  gfx::Rect CardBounds() const;
++  void ShowOpenTabs();
++  void SetEntries(std::vector<Entry> entries);
++  void RefreshRows();
++  void LoadFavicon(size_t entry_index);
++  void OnFavicon(GURL url, const favicon_base::FaviconImageResult& result);
++  void OpenTypedText();
++
++  raw_ptr<BrowserWindowInterface> browser_;
++  raw_ptr<Profile> profile_;
++  base::OnceClosure close_callback_;
++  SkColor accent_;
++  SkColor accent_end_;
++
++  raw_ptr<views::View> card_ = nullptr;
++  raw_ptr<views::Textfield> field_ = nullptr;
++  std::vector<raw_ptr<RowView>> rows_;
++  std::vector<Entry> entries_;
++  int selected_ = 0;
++
++  std::unique_ptr<AutocompleteController> controller_;
++  base::CancelableTaskTracker favicon_tracker_;
++  base::WeakPtrFactory<CommandBarView> weak_factory_{this};
++};
++
++RowView::RowView(CommandBarView* owner, int index)
++    : views::Button(base::BindRepeating(
++          [](CommandBarView* owner, int index) { owner->Activate(index); },
++          base::Unretained(owner), index)),
++      owner_(owner),
++      index_(index) {
++  SetFocusBehavior(FocusBehavior::NEVER);
++  GetViewAccessibility().SetName(u" ");
++}
++
++void RowView::SetEntry(const Entry& entry, bool selected, SkColor accent) {
++  entry_ = entry;
++  selected_ = selected;
++  accent_ = accent;
++  GetViewAccessibility().SetName(entry.title.empty() ? std::u16string(u" ")
++                                                     : entry.title);
++  SchedulePaint();
++}
++
++void RowView::OnMouseEntered(const ui::MouseEvent& event) {
++  owner_->Select(index_);
++}
++
++void RowView::PaintButtonContents(gfx::Canvas* canvas) {
++  const gfx::Rect bounds = GetLocalBounds();
++  if (selected_) {
++    cc::PaintFlags fill;
++    fill.setAntiAlias(true);
++    fill.setColor(SkColorSetA(accent_, 0x2E));
++    canvas->DrawRoundRect(gfx::RectF(bounds), kRowRadius, fill);
++  }
++
++  const int pad = 12;
++  int x = pad;
++  const int cy = bounds.height() / 2;
++  if (!entry_.icon.IsEmpty()) {
++    gfx::ImageSkia icon = entry_.icon.Rasterize(GetColorProvider());
++    if (icon.width() != kIconSize) {
++      icon = gfx::ImageSkiaOperations::CreateResizedImage(
++          icon, skia::ImageOperations::RESIZE_BEST,
++          gfx::Size(kIconSize, kIconSize));
++    }
++    canvas->DrawImageInt(icon, x, cy - kIconSize / 2);
++  }
++  x += kIconSize + 12;
++
++  const gfx::FontList font = gfx::FontList().DeriveWithSizeDelta(1);
++  const gfx::FontList small = gfx::FontList();
++
++  // Right side: action text + arrow.
++  int right = bounds.width() - pad;
++  if (!entry_.action.empty()) {
++    const gfx::ImageSkia arrow = gfx::CreateVectorIcon(
++        vector_icons::kArrowForwardIcon, 14,
++        selected_ ? kTextColor : kSubtleText);
++    right -= arrow.width();
++    canvas->DrawImageInt(arrow, right, cy - arrow.height() / 2);
++    right -= 8;
++    const int w = gfx::GetStringWidth(entry_.action, small);
++    canvas->DrawStringRect(entry_.action, small,
++                           selected_ ? kTextColor : kSubtleText,
++                           gfx::Rect(right - w, 0, w, bounds.height()));
++    right -= w + 16;
++  }
++
++  const std::u16string title = gfx::ElideText(
++      entry_.title, font, std::max(0, right - x), gfx::ELIDE_TAIL);
++  canvas->DrawStringRect(title, font, kTextColor,
++                         gfx::Rect(x, 0, std::max(0, right - x),
++                                   bounds.height()));
++}
++
++BEGIN_METADATA(RowView)
++END_METADATA
++
++CommandBarView::CommandBarView(BrowserWindowInterface* browser,
++                               base::OnceClosure close_callback)
++    : browser_(browser),
++      profile_(browser->GetProfile()),
++      close_callback_(std::move(close_callback)) {
++  const std::vector<browse_spaces::Space> spaces = browse_spaces::GetSpaces();
++  const int index = std::max(
++      0, browse_spaces::IndexOfProfile(spaces, profile_->GetOriginalProfile()));
++  accent_ = browse_spaces::ColorForIndex(index);
++  accent_end_ = browse_spaces::GradientEndForIndex(index);
++
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++
++  card_ = AddChildView(std::make_unique<views::View>());
++  card_->SetPaintToLayer();
++  card_->layer()->SetFillsBoundsOpaquely(false);
++  card_->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(kCardRadius));
++  card_->SetBackground(views::CreateSolidBackground(kCardColor));
++
++  field_ = card_->AddChildView(std::make_unique<views::Textfield>());
++  field_->set_controller(this);
++  field_->SetBorder(nullptr);
++  field_->SetBackground(nullptr);
++  field_->SetColor(kTextColor);
++  field_->SetFontList(gfx::FontList().DeriveWithSizeDelta(5));
++  field_->SetPlaceholderText(u"Search or Enter URL…");
++  field_->GetViewAccessibility().SetName(u"Search or enter URL");
++
++  for (int i = 0; i < kMaxRows; ++i) {
++    RowView* row = card_->AddChildView(std::make_unique<RowView>(this, i));
++    row->SetVisible(false);
++    rows_.push_back(row);
++  }
++
++  AutocompleteControllerConfig config{
++      .provider_types = AutocompleteClassifier::DefaultOmniboxProviders()};
++  controller_ = std::make_unique<AutocompleteController>(
++      std::make_unique<ChromeAutocompleteProviderClient>(profile_), config);
++  controller_->AddObserver(this);
++
++  ShowOpenTabs();
++}
++
++CommandBarView::~CommandBarView() {
++  if (controller_) {
++    controller_->RemoveObserver(this);
++    controller_->Stop(AutocompleteStopReason::kClobbered);
++  }
++}
++
++gfx::Rect CommandBarView::CardBounds() const {
++  const int width = std::min(kCardMaxWidth, this->width() - 2 * kCardSideMargin);
++  int visible_rows = 0;
++  for (const auto& row : rows_) {
++    visible_rows += row->GetVisible() ? 1 : 0;
++  }
++  const int height = kFieldHeight +
++                     (visible_rows ? 1 + kRowInset * 2 +
++                                         visible_rows * kRowHeight
++                                   : 0);
++  const int x = (this->width() - width) / 2;
++  const int y = static_cast<int>(this->height() * kCardTopFraction);
++  return gfx::Rect(x, y, std::max(width, 0), height);
++}
++
++void CommandBarView::Layout(PassKey) {
++  const gfx::Rect card = CardBounds();
++  card_->SetBoundsRect(card);
++  const int field_left = 16 + 18 + 12;  // Padding + search icon + gap.
++  field_->SetBounds(field_left, 0, card.width() - field_left - 16,
++                    kFieldHeight);
++  int y = kFieldHeight + 1 + kRowInset;
++  for (const auto& row : rows_) {
++    if (!row->GetVisible()) {
++      continue;
++    }
++    row->SetBounds(kRowInset, y, card.width() - 2 * kRowInset, kRowHeight);
++    y += kRowHeight;
++  }
++  SchedulePaint();
++}
++
++void CommandBarView::OnPaint(gfx::Canvas* canvas) {
++  const gfx::RectF bounds(GetLocalBounds());
++
++  // Soft space-colored wash over the page.
++  cc::PaintFlags wash;
++  const SkPoint points[2] = {SkPoint::Make(0, 0),
++                             SkPoint::Make(bounds.width(), bounds.height())};
++  const SkColor4f colors[2] = {
++      SkColor4f::FromColor(SkColorSetA(accent_, 0x40)),
++      SkColor4f::FromColor(SkColorSetA(accent_end_, 0x30))};
++  wash.setShader(cc::PaintShader::MakeLinearGradient(points, colors, nullptr,
++                                                     2, SkTileMode::kClamp));
++  canvas->DrawRect(bounds, wash);
++  cc::PaintFlags veil;
++  veil.setColor(SkColorSetA(SK_ColorWHITE, 0x55));
++  canvas->DrawRect(bounds, veil);
++
++  // Soft shadow under the card.
++  const gfx::RectF card(CardBounds());
++  cc::PaintFlags shadow;
++  shadow.setAntiAlias(true);
++  shadow.setColor(SkColorSetA(SK_ColorBLACK, 0x26));
++  shadow.setImageFilter(sk_make_sp<cc::BlurPaintFilter>(
++      18.f, 18.f, SkTileMode::kDecal, nullptr));
++  gfx::RectF shadow_rect = card;
++  shadow_rect.Offset(0, 10);
++  canvas->DrawRoundRect(shadow_rect, kCardRadius, shadow);
++}
++
++bool CommandBarView::OnMousePressed(const ui::MouseEvent& event) {
++  if (!card_->bounds().Contains(event.location())) {
++    Close();
++    return true;
++  }
++  return false;
++}
++
++void CommandBarView::AnimateIn() {
++  layer()->SetOpacity(0.f);
++  gfx::Transform start;
++  const gfx::Rect card = CardBounds();
++  start.Translate(card.width() * 0.015f, 6.f);
++  start.Scale(0.97f, 0.97f);
++  card_->layer()->SetTransform(start);
++  {
++    ui::ScopedLayerAnimationSettings settings(layer()->GetAnimator());
++    settings.SetTransitionDuration(kAppearDuration);
++    settings.SetTweenType(gfx::Tween::EASE_OUT);
++    layer()->SetOpacity(1.f);
++  }
++  ui::ScopedLayerAnimationSettings settings(card_->layer()->GetAnimator());
++  settings.SetTransitionDuration(base::Milliseconds(200));
++  settings.SetTweenType(gfx::Tween::EASE_OUT_3);
++  card_->layer()->SetTransform(gfx::Transform());
++}
++
++void CommandBarView::ShowOpenTabs() {
++  std::vector<Entry> entries;
++  TabStripModel* model = browser_->GetTabStripModel();
++  if (model) {
++    const int active = model->active_index();
++    for (int i = model->count() - 1; i >= 0 && entries.size() < kMaxRows;
++         --i) {
++      if (i == active) {
++        continue;
++      }
++      content::WebContents* contents = model->GetWebContentsAt(i);
++      Entry entry;
++      entry.title = contents->GetTitle();
++      entry.url = contents->GetLastCommittedURL();
++      entry.action = u"Switch to Tab";
++      entry.tab_index = i;
++      if (auto* driver =
++              favicon::ContentFaviconDriver::FromWebContents(contents)) {
++        const gfx::Image favicon = driver->GetFavicon();
++        if (!favicon.IsEmpty()) {
++          entry.icon = ui::ImageModel::FromImage(favicon);
++        }
++      }
++      if (entry.icon.IsEmpty()) {
++        entry.icon = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon,
++                                                    kSubtleText, kIconSize);
++      }
++      entries.push_back(std::move(entry));
++    }
++  }
++  SetEntries(std::move(entries));
++}
++
++void CommandBarView::SetEntries(std::vector<Entry> entries) {
++  entries_ = std::move(entries);
++  selected_ = 0;
++  for (size_t i = 0; i < rows_.size(); ++i) {
++    rows_[i]->SetVisible(i < entries_.size());
++  }
++  RefreshRows();
++  InvalidateLayout();
++}
++
++void CommandBarView::RefreshRows() {
++  for (size_t i = 0; i < rows_.size() && i < entries_.size(); ++i) {
++    rows_[i]->SetEntry(entries_[i], static_cast<int>(i) == selected_, accent_);
++  }
++}
++
++void CommandBarView::Select(int index) {
++  if (index < 0 || index >= static_cast<int>(entries_.size()) ||
++      index == selected_) {
++    return;
++  }
++  selected_ = index;
++  RefreshRows();
++}
++
++void CommandBarView::ContentsChanged(views::Textfield* sender,
++                                     const std::u16string& new_contents) {
++  if (new_contents.empty()) {
++    controller_->Stop(AutocompleteStopReason::kClobbered);
++    ShowOpenTabs();
++    return;
++  }
++  AutocompleteInput input(new_contents,
++                          metrics::OmniboxEventProto::NTP_REALBOX,
++                          ChromeAutocompleteSchemeClassifier(profile_));
++  input.set_prevent_inline_autocomplete(true);
++  controller_->Start(input);
++}
++
++void CommandBarView::OnResultChanged(AutocompleteController* controller,
++                                     bool default_match_changed) {
++  if (field_->GetText().empty()) {
++    return;
++  }
++  TabStripModel* model = browser_->GetTabStripModel();
++  std::vector<Entry> entries;
++  for (const AutocompleteMatch& match : controller->result()) {
++    if (entries.size() >= kMaxRows) {
++      break;
++    }
++    if (!match.destination_url.is_valid()) {
++      continue;
++    }
++    Entry entry;
++    entry.url = match.destination_url;
++    entry.transition = match.transition;
++    const bool is_search = AutocompleteMatch::IsSearchType(match.type);
++    if (is_search) {
++      entry.title = match.contents;
++      entry.action = u"Search";
++    } else {
++      entry.title = match.description.empty() ? match.contents
++                                              : match.description;
++      entry.action = u"Open";
++    }
++    if (match.has_tab_match.value_or(false) && model) {
++      for (int i = 0; i < model->count(); ++i) {
++        if (model->GetWebContentsAt(i)->GetLastCommittedURL() ==
++            match.destination_url) {
++          entry.tab_index = i;
++          entry.switch_to_tab = true;
++          entry.action = u"Switch to Tab";
++          if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(
++                  model->GetWebContentsAt(i))) {
++            const gfx::Image favicon = driver->GetFavicon();
++            if (!favicon.IsEmpty()) {
++              entry.icon = ui::ImageModel::FromImage(favicon);
++            }
++          }
++          break;
++        }
++      }
++    }
++    if (entry.icon.IsEmpty()) {
++      entry.icon = ui::ImageModel::FromVectorIcon(
++          match.GetVectorIcon(/*is_bookmark=*/false), kSubtleText, kIconSize);
++    }
++    entries.push_back(std::move(entry));
++  }
++  SetEntries(std::move(entries));
++  for (size_t i = 0; i < entries_.size(); ++i) {
++    if (entries_[i].tab_index < 0 &&
++        entries_[i].action != u"Search") {
++      LoadFavicon(i);
++    }
++  }
++}
++
++void CommandBarView::LoadFavicon(size_t entry_index) {
++  favicon::FaviconService* service = FaviconServiceFactory::GetForProfile(
++      profile_, ServiceAccessType::EXPLICIT_ACCESS);
++  if (!service) {
++    return;
++  }
++  const GURL url = entries_[entry_index].url;
++  service->GetFaviconImageForPageURL(
++      url,
++      base::BindOnce(&CommandBarView::OnFavicon, weak_factory_.GetWeakPtr(),
++                     url),
++      &favicon_tracker_);
++}
++
++void CommandBarView::OnFavicon(GURL url,
++                               const favicon_base::FaviconImageResult& result) {
++  if (result.image.IsEmpty()) {
++    return;
++  }
++  for (Entry& entry : entries_) {
++    if (entry.url == url && entry.tab_index < 0) {
++      entry.icon = ui::ImageModel::FromImage(result.image);
++    }
++  }
++  RefreshRows();
++}
++
++bool CommandBarView::HandleKeyEvent(views::Textfield* sender,
++                                    const ui::KeyEvent& key_event) {
++  if (key_event.type() != ui::EventType::kKeyPressed) {
++    return false;
++  }
++  switch (key_event.key_code()) {
++    case ui::VKEY_ESCAPE:
++      Close();
++      return true;
++    case ui::VKEY_DOWN:
++      Select(std::min(selected_ + 1, static_cast<int>(entries_.size()) - 1));
++      return true;
++    case ui::VKEY_UP:
++      Select(std::max(selected_ - 1, 0));
++      return true;
++    case ui::VKEY_RETURN:
++      if (!entries_.empty()) {
++        Activate(selected_);
++      } else {
++        OpenTypedText();
++      }
++      return true;
++    default:
++      return false;
++  }
++}
++
++void CommandBarView::OpenTypedText() {
++  const std::u16string text(field_->GetText());
++  if (text.empty()) {
++    Close();
++    return;
++  }
++  AutocompleteMatch match;
++  AutocompleteClassifierFactory::GetForProfile(profile_)->Classify(
++      text, false, false, metrics::OmniboxEventProto::NTP_REALBOX, &match,
++      nullptr);
++  if (match.destination_url.is_valid()) {
++    NavigateParams params(browser_, match.destination_url, match.transition);
++    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    Navigate(&params);
++  }
++  Close();
++}
++
++void CommandBarView::Activate(int index) {
++  if (index < 0 || index >= static_cast<int>(entries_.size())) {
++    return;
++  }
++  const Entry entry = entries_[index];
++  TabStripModel* model = browser_->GetTabStripModel();
++  if (entry.tab_index >= 0 && model && entry.tab_index < model->count()) {
++    model->ActivateTabAt(entry.tab_index);
++  } else if (entry.url.is_valid()) {
++    NavigateParams params(browser_, entry.url, entry.transition);
++    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    Navigate(&params);
++  }
++  Close();
++}
++
++void CommandBarView::Close() {
++  if (close_callback_) {
++    std::move(close_callback_).Run();
++  }
++}
++
++BEGIN_METADATA(CommandBarView)
++END_METADATA
++
++// Owns the bar's widget. Only one bar is open at a time.
++class CommandBar : public views::WidgetObserver {
++ public:
++  explicit CommandBar(BrowserView* browser_view)
++      : browser_view_(browser_view) {
++    views::Widget* parent = browser_view->GetWidget();
++    widget_ = std::make_unique<views::Widget>();
++    views::Widget::InitParams params(
++        views::Widget::InitParams::CLIENT_OWNS_WIDGET,
++        views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
++    params.parent = parent->GetNativeView();
++    params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
++    params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
++    params.activatable = views::Widget::InitParams::Activatable::kYes;
++    params.name = "BrowseCommandBar";
++    params.bounds = browser_view->contents_container()->GetBoundsInScreen();
++    widget_->Init(std::move(params));
++
++    view_ = widget_->SetContentsView(std::make_unique<CommandBarView>(
++        browser_view->browser(),
++        base::BindOnce(&CommandBar::RequestClose, base::Unretained(this))));
++
++    widget_observation_.Observe(widget_.get());
++    parent_observation_.Observe(parent);
++    widget_->Show();
++    view_->AnimateIn();
++    view_->FocusField();
++  }
++
++  ~CommandBar() override = default;
++
++  BrowserView* browser_view() const { return browser_view_; }
++
++  void RequestClose();
++
++  // views::WidgetObserver:
++  void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
++    if (widget == widget_.get() && !active) {
++      RequestClose();
++    }
++  }
++  void OnWidgetDestroying(views::Widget* widget) override {
++    widget_observation_.Reset();
++    parent_observation_.Reset();
++    if (widget != widget_.get()) {
++      // The browser window is going away: close with it.
++      RequestClose();
++    }
++  }
++  void OnWidgetBoundsChanged(views::Widget* widget,
++                             const gfx::Rect& new_bounds) override {
++    if (widget != widget_.get()) {
++      RequestClose();  // Window moved or resized: just dismiss.
++    }
++  }
++
++ private:
++  raw_ptr<BrowserView> browser_view_;
++  std::unique_ptr<views::Widget> widget_;
++  raw_ptr<CommandBarView> view_ = nullptr;
++  bool closing_ = false;
++  base::ScopedObservation<views::Widget, views::WidgetObserver>
++      widget_observation_{this};
++  base::ScopedObservation<views::Widget, views::WidgetObserver>
++      parent_observation_{this};
++
++};
++
++std::unique_ptr<CommandBar>& Current() {
++  static base::NoDestructor<std::unique_ptr<CommandBar>> current;
++  return *current;
++}
++
++void CommandBar::RequestClose() {
++  if (closing_) {
++    return;
++  }
++  closing_ = true;
++  widget_observation_.Reset();
++  parent_observation_.Reset();
++  if (widget_) {
++    widget_->Hide();
++  }
++  // Destroy outside of any event or observer callback that got us here.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce([]() { Current().reset(); }));
++}
++
++}  // namespace
++
++bool Show(BrowserWindowInterface* browser) {
++  if (!browser || browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
++    return false;
++  }
++  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
++  if (!browser_view || !browser_view->GetWidget() ||
++      !browser_view->contents_container() ||
++      browser_view->GetWidget()->IsFullscreen()) {
++    return false;
++  }
++  if (Current()) {
++    // A pending close of a previous bar; drop it now.
++    Current().reset();
++  }
++  Current() = std::make_unique<CommandBar>(browser_view);
++  return true;
++}
++
++}  // namespace browse_command_bar
+Index: src/chrome/browser/ui/views/frame/browse_command_bar.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_command_bar.h	2026-11-05 22:16:57.450832614 -0500
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_COMMAND_BAR_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_COMMAND_BAR_H_
++
++class BrowserWindowInterface;
++
++// Browse: Cmd+T opens a floating command bar over the page instead of a new
++// tab page. Typing searches or opens a URL in a new tab; open tabs show as
++// "Switch to Tab". Esc or clicking outside closes it.
++namespace browse_command_bar {
++
++// Shows the command bar for `browser`. Returns false if the bar can't be
++// shown for this window (e.g. app/popup windows), in which case the caller
++// should fall back to opening a normal new tab.
++bool Show(BrowserWindowInterface* browser);
++
++}  // namespace browse_command_bar
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_COMMAND_BAR_H_

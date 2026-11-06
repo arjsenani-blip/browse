@@ -1,0 +1,421 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn	2026-11-05 06:14:16.637934556 -0500
++++ src/chrome/browser/ui/BUILD.gn	2026-11-05 22:06:25.460414474 -0500
+@@ -3551,6 +3551,8 @@
+   if (toolkit_views) {
+     sources += [
+       "views/frame/base_tab_strip_region_view.cc",
++      "views/frame/browse_loading_bar_view.cc",
++      "views/frame/browse_loading_bar_view.h",
+       "views/frame/browse_space_indicator_view.cc",
+       "views/frame/browse_space_indicator_view.h",
+       "views/frame/base_tab_strip_region_view.h",
+Index: src/chrome/browser/ui/views/frame/browse_loading_bar_view.cc
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_loading_bar_view.cc	2026-11-05 22:09:11.808394456 -0500
+@@ -0,0 +1,237 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/browse_loading_bar_view.h"
++
++#include <algorithm>
++
++#include "cc/paint/paint_filter.h"
++#include "cc/paint/paint_flags.h"
++#include "cc/paint/paint_shader.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/contents_web_view.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/compositor/layer.h"
++#include "ui/compositor/scoped_layer_animation_settings.h"
++#include "ui/gfx/animation/tween.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/color_utils.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/view_class_properties.h"
++
++namespace {
++
++constexpr int kBarHeight = 10;       // Includes room for the glow.
++constexpr float kLineHeight = 2.5f;  // The crisp line itself.
++constexpr float kGlowSigma = 3.0f;
++constexpr base::TimeDelta kProgressDuration = base::Milliseconds(260);
++constexpr base::TimeDelta kFadeDuration = base::Milliseconds(320);
++constexpr double kStartProgress = 0.08;
++
++}  // namespace
++
++BrowseLoadingBarView::BrowseLoadingBarView(BrowserView* browser_view,
++                                           ContentsWebView* host)
++    : browser_view_(browser_view),
++      host_(host),
++      progress_animation_(std::make_unique<gfx::SlideAnimation>(this)) {
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++  layer()->SetOpacity(0.f);
++  SetProperty(views::kViewIgnoredByLayoutKey, true);
++  GetViewAccessibility().SetIsIgnored(true);
++  SetVisible(false);
++
++  progress_animation_->SetSlideDuration(kProgressDuration);
++  progress_animation_->SetTweenType(gfx::Tween::EASE_OUT);
++
++  host_observation_.Observe(host_.get());
++  UpdateColor();
++}
++
++BrowseLoadingBarView::~BrowseLoadingBarView() {
++  if (host_) {
++    host_->set_browse_loading_bar(nullptr);
++  }
++}
++
++void BrowseLoadingBarView::SetWebContents(content::WebContents* web_contents) {
++  if (web_contents == this->web_contents()) {
++    return;
++  }
++  Observe(web_contents);
++  if (web_contents && web_contents->ShouldShowLoadingUI()) {
++    // Switched to a tab that is mid-load: pick up where it is.
++    Begin();
++    AnimateTo(std::max(kStartProgress, web_contents->GetLoadProgress()));
++  } else {
++    HideNow();
++  }
++}
++
++void BrowseLoadingBarView::OnPaint(gfx::Canvas* canvas) {
++  if (shown_ <= 0.0) {
++    return;
++  }
++  const float width = static_cast<float>(this->width()) * shown_;
++  const gfx::RectF line(0, 0, width, kLineHeight);
++
++  // Neon gradient: the space color, brightening toward the leading edge.
++  const SkColor bright =
++      color_utils::AlphaBlend(SK_ColorWHITE, end_color_, 0.35f);
++  const SkPoint points[2] = {SkPoint::Make(0, 0), SkPoint::Make(width, 0)};
++  const SkColor4f colors[3] = {SkColor4f::FromColor(color_),
++                               SkColor4f::FromColor(end_color_),
++                               SkColor4f::FromColor(bright)};
++  const SkScalar positions[3] = {0.f, 0.85f, 1.f};
++
++  // Soft glow underneath.
++  cc::PaintFlags glow;
++  glow.setAntiAlias(true);
++  glow.setShader(cc::PaintShader::MakeLinearGradient(
++      points, colors, positions, 3, SkTileMode::kClamp));
++  glow.setAlphaf(0.55f);
++  glow.setImageFilter(sk_make_sp<cc::BlurPaintFilter>(
++      kGlowSigma, kGlowSigma, SkTileMode::kDecal, nullptr));
++  canvas->DrawRect(gfx::RectF(0, 0, width, kLineHeight + 2.f), glow);
++
++  // Crisp line on top, with a rounded leading edge.
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  flags.setShader(cc::PaintShader::MakeLinearGradient(
++      points, colors, positions, 3, SkTileMode::kClamp));
++  canvas->DrawRoundRect(line, kLineHeight / 2, flags);
++}
++
++bool BrowseLoadingBarView::GetCanProcessEventsWithinSubtree() const {
++  return false;
++}
++
++void BrowseLoadingBarView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  UpdateColor();
++}
++
++void BrowseLoadingBarView::DidStartLoading() {
++  if (!web_contents() || !web_contents()->ShouldShowLoadingUI()) {
++    return;  // Ignore same-document and subframe-only loads.
++  }
++  Begin();
++  AnimateTo(kStartProgress);
++}
++
++void BrowseLoadingBarView::DidStopLoading() {
++  if (active_) {
++    FinishAndFade();
++  }
++}
++
++void BrowseLoadingBarView::LoadProgressChanged(double progress) {
++  if (!active_ || finishing_) {
++    return;
++  }
++  if (progress >= 1.0) {
++    FinishAndFade();
++    return;
++  }
++  if (progress > to_) {
++    AnimateTo(progress);
++  }
++}
++
++void BrowseLoadingBarView::WebContentsDestroyed() {
++  Observe(nullptr);
++  HideNow();
++}
++
++void BrowseLoadingBarView::OnViewBoundsChanged(views::View* observed_view) {
++  SyncBounds();
++}
++
++void BrowseLoadingBarView::OnViewIsDeleting(views::View* observed_view) {
++  host_observation_.Reset();
++  host_ = nullptr;
++}
++
++void BrowseLoadingBarView::AnimationProgressed(
++    const gfx::Animation* animation) {
++  shown_ = gfx::Tween::DoubleValueBetween(animation->GetCurrentValue(), from_,
++                                          to_);
++  SchedulePaint();
++}
++
++void BrowseLoadingBarView::AnimationEnded(const gfx::Animation* animation) {
++  shown_ = to_;
++  SchedulePaint();
++  if (finishing_) {
++    // Fade on the compositor; no repaints needed while it fades.
++    ui::ScopedLayerAnimationSettings settings(layer()->GetAnimator());
++    settings.SetTransitionDuration(kFadeDuration);
++    settings.SetTweenType(gfx::Tween::EASE_OUT);
++    layer()->SetOpacity(0.f);
++    active_ = false;
++    finishing_ = false;
++  }
++}
++
++void BrowseLoadingBarView::SyncBounds() {
++  if (!host_) {
++    return;
++  }
++  SetBounds(host_->x(), host_->y(), host_->width(), kBarHeight);
++}
++
++void BrowseLoadingBarView::UpdateColor() {
++  Profile* profile = browser_view_->browser()->GetProfile();
++  const std::vector<browse_spaces::Space> spaces = browse_spaces::GetSpaces();
++  const int index = browse_spaces::IndexOfProfile(spaces, profile);
++  color_ = browse_spaces::ColorForIndex(std::max(index, 0));
++  end_color_ = browse_spaces::GradientEndForIndex(std::max(index, 0));
++  if (shown_ > 0.0) {
++    SchedulePaint();
++  }
++}
++
++void BrowseLoadingBarView::Begin() {
++  SyncBounds();
++  layer()->GetAnimator()->StopAnimating();
++  if (!active_ || finishing_) {
++    shown_ = 0.0;
++    to_ = 0.0;
++  }
++  active_ = true;
++  finishing_ = false;
++  SetVisible(true);
++  layer()->SetOpacity(1.f);
++}
++
++void BrowseLoadingBarView::AnimateTo(double target) {
++  from_ = shown_;
++  to_ = std::clamp(target, 0.0, 1.0);
++  progress_animation_->Reset(0.0);
++  progress_animation_->Show();
++}
++
++void BrowseLoadingBarView::FinishAndFade() {
++  finishing_ = true;
++  AnimateTo(1.0);
++}
++
++void BrowseLoadingBarView::HideNow() {
++  progress_animation_->Stop();
++  layer()->GetAnimator()->StopAnimating();
++  active_ = false;
++  finishing_ = false;
++  shown_ = to_ = from_ = 0.0;
++  layer()->SetOpacity(0.f);
++  SetVisible(false);
++}
++
++BEGIN_METADATA(BrowseLoadingBarView)
++END_METADATA
+Index: src/chrome/browser/ui/views/frame/browse_loading_bar_view.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_loading_bar_view.h	2026-11-05 22:06:25.457409807 -0500
+@@ -0,0 +1,82 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_LOADING_BAR_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_LOADING_BAR_VIEW_H_
++
++#include <memory>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/animation/animation_delegate.h"
++#include "ui/gfx/animation/slide_animation.h"
++#include "ui/views/view.h"
++#include "ui/views/view_observer.h"
++
++class BrowserView;
++class ContentsWebView;
++
++// Browse: a thin neon progress line along the top of the page. It tracks the
++// front tab's real load progress, glows in the space's color and fades out
++// when loading finishes. Nothing animates or repaints while idle.
++class BrowseLoadingBarView : public views::View,
++                             public content::WebContentsObserver,
++                             public views::ViewObserver,
++                             public gfx::AnimationDelegate {
++  METADATA_HEADER(BrowseLoadingBarView, views::View)
++
++ public:
++  BrowseLoadingBarView(BrowserView* browser_view, ContentsWebView* host);
++  BrowseLoadingBarView(const BrowseLoadingBarView&) = delete;
++  BrowseLoadingBarView& operator=(const BrowseLoadingBarView&) = delete;
++  ~BrowseLoadingBarView() override;
++
++  // Called by ContentsWebView whenever its web contents changes.
++  void SetWebContents(content::WebContents* web_contents);
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override;
++  bool GetCanProcessEventsWithinSubtree() const override;
++  void OnThemeChanged() override;
++
++  // content::WebContentsObserver:
++  void DidStartLoading() override;
++  void DidStopLoading() override;
++  void LoadProgressChanged(double progress) override;
++  void WebContentsDestroyed() override;
++
++  // views::ViewObserver:
++  void OnViewBoundsChanged(views::View* observed_view) override;
++  void OnViewIsDeleting(views::View* observed_view) override;
++
++  // gfx::AnimationDelegate:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
++
++ private:
++  void SyncBounds();
++  void UpdateColor();
++  void Begin();
++  void AnimateTo(double target);
++  void FinishAndFade();
++  void HideNow();
++
++  raw_ptr<BrowserView> browser_view_;
++  raw_ptr<ContentsWebView> host_;
++  base::ScopedObservation<views::View, views::ViewObserver> host_observation_{
++      this};
++
++  SkColor color_ = SK_ColorCYAN;
++  SkColor end_color_ = SK_ColorBLUE;
++  bool active_ = false;
++  bool finishing_ = false;
++  double shown_ = 0.0;
++  double from_ = 0.0;
++  double to_ = 0.0;
++  std::unique_ptr<gfx::SlideAnimation> progress_animation_;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_LOADING_BAR_VIEW_H_
+Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/contents_container_view.cc	2026-11-05 06:13:49.397296261 -0500
++++ src/chrome/browser/ui/views/frame/contents_container_view.cc	2026-11-05 22:06:25.465138500 -0500
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/frame/contents_container_view.h"
+ 
++#include "chrome/browser/ui/views/frame/browse_loading_bar_view.h"
++
+ #include <memory>
+ #include <optional>
+ #include <utility>
+@@ -166,6 +168,10 @@
+       AddChildView(std::make_unique<ContentsCaptureBorderView>(nullptr));
+ 
+   view_bounds_observer_.Observe(contents_view_);
++
++  // Browse: neon loading bar, stacked above the page.
++  contents_view_->set_browse_loading_bar(AddChildView(
++      std::make_unique<BrowseLoadingBarView>(browser_view, contents_view_)));
+ }
+ 
+ ContentsContainerView::~ContentsContainerView() {
+Index: src/chrome/browser/ui/views/frame/contents_web_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/contents_web_view.cc	2026-10-28 16:20:02.000000000 -0400
++++ src/chrome/browser/ui/views/frame/contents_web_view.cc	2026-11-05 22:06:25.463736159 -0500
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/frame/contents_web_view.h"
+ 
++#include "chrome/browser/ui/views/frame/browse_loading_bar_view.h"
++
+ #include "base/debug/dump_without_crashing.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+@@ -147,6 +149,9 @@
+ 
+ void ContentsWebView::SetWebContents(content::WebContents* web_contents) {
+   views::WebView::SetWebContents(web_contents);
++  if (browse_loading_bar_) {
++    browse_loading_bar_->SetWebContents(web_contents);
++  }
+   if (web_contents == nullptr) {
+     status_bubble_.reset();
+     holder()->SetProperty(views::kIsBlockedByModalKey, false);
+Index: src/chrome/browser/ui/views/frame/contents_web_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/contents_web_view.h	2026-10-28 16:20:02.000000000 -0400
++++ src/chrome/browser/ui/views/frame/contents_web_view.h	2026-11-05 22:06:25.462448457 -0500
+@@ -16,6 +16,7 @@
+ #include "ui/gfx/geometry/rounded_corners_f.h"
+ #include "ui/views/controls/webview/webview.h"
+ 
++class BrowseLoadingBarView;
+ class StatusBubbleViews;
+ class WebContentsCloseHandler;
+ 
+@@ -55,6 +56,11 @@
+   // Update the blocked state based on the tab's modal dialog status.
+   void UpdateIsBlockedByModal();
+ 
++  // Browse: the loading bar that follows this view's web contents.
++  void set_browse_loading_bar(BrowseLoadingBarView* bar) {
++    browse_loading_bar_ = bar;
++  }
++
+   // WebView overrides:
+   bool GetNeedsNotificationWhenVisibleBoundsChange() const override;
+   void OnVisibleBoundsChanged() override;
+@@ -80,6 +86,7 @@
+   void DestroyClonedLayer() override;
+ 
+  private:
++  raw_ptr<BrowseLoadingBarView> browse_loading_bar_ = nullptr;
+   void UpdateBackgroundColor();
+   std::unique_ptr<StatusBubbleViews> status_bubble_;
+   std::unique_ptr<WebContentsCloseHandler> web_contents_close_handler_;

@@ -1,0 +1,112 @@
+Index: src/chrome/browser/prefs/session_startup_pref.cc
+===================================================================
+--- src.orig/chrome/browser/prefs/session_startup_pref.cc	2026-10-28 16:20:02.000000000 -0400
++++ src/chrome/browser/prefs/session_startup_pref.cc	2026-11-06 08:10:47.758144375 -0500
+@@ -66,12 +66,9 @@
+ #if BUILDFLAG(IS_CHROMEOS)
+   return SessionStartupPref::LAST;
+ #else
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+-  if (features::kSetDefaultToContinueSession.Get()) {
+-    return SessionStartupPref::LAST;
+-  }
+-#endif
+-  return SessionStartupPref::DEFAULT;
++  // Browse: always continue where you left off, so folders and their tabs
++  // (and every other tab) come back after quitting.
++  return SessionStartupPref::LAST;
+ #endif
+ }
+ 
+Index: src/chrome/browser/ui/views/tabs/common/tab_group_header_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_group_header_view.cc	2026-11-05 06:13:47.284582585 -0500
++++ src/chrome/browser/ui/views/tabs/common/tab_group_header_view.cc	2026-11-06 08:10:56.606188789 -0500
+@@ -387,7 +387,7 @@
+ 
+ void TabGroupHeaderView::OnMouseEntered(const ui::MouseEvent& event) {
+   delegate_->UpdateHoverCard(TabSlotController::HoverCardUpdateType::kHover);
+-  UpdateEditorBubbleButtonVisibility();
++  UpdateEditorBubbleButtonVisibility();  UpdateColors();  // Browse: hover highlight in the sidebar.
+ }
+ 
+ void TabGroupHeaderView::OnMouseExited(const ui::MouseEvent& event) {
+@@ -398,6 +398,7 @@
+ #else
+   UpdateEditorBubbleButtonVisibility();
+ #endif
++  UpdateColors();
+ }
+ 
+ void TabGroupHeaderView::OnFocus() {
+@@ -518,7 +519,8 @@
+   tab_group_visual_data_ = tab_group_data.visual_data;
+   is_shared_ = tab_group_data.is_sharing_group;
+ 
+-  if (delegate_->IsValid() && delegate_->GetTabGroup().is_ephemeral()) {
++  if (delegate_->IsValid() && delegate_->GetTabGroup().is_ephemeral() &&
++      tab_group_visual_data_.title().empty()) {
+     OnTabCountChanged();
+   } else {
+     group_header_label_->SetText(tab_group_visual_data_.title());
+@@ -537,7 +539,8 @@
+ }
+ 
+ void TabGroupHeaderView::OnTabCountChanged() {
+-  if (delegate_->IsValid() && delegate_->GetTabGroup().is_ephemeral()) {
++  if (delegate_->IsValid() && delegate_->GetTabGroup().is_ephemeral() &&
++      tab_group_visual_data_.title().empty()) {
+     const int tab_count = delegate_->GetTabGroup().tab_count();
+     group_header_label_->SetText(l10n_util::GetPluralStringFUTF16(
+         IDS_TAB_GROUP_HEADER_EPHEMERAL_TAB_COUNT, tab_count));
+@@ -600,6 +603,10 @@
+   if (!GetColorProvider()) {
+     return SK_ColorBLACK;
+   }
++  if (orientation_ == TabStripOrientation::kVertical) {
++    // Browse: plain text on the sidebar, like a folder row.
++    return GetColorProvider()->GetColor(ui::kColorSysOnSurface);
++  }
+   if (delegate_->IsValid() && delegate_->GetTabGroup().is_ephemeral()) {
+     const bool frame_active = GetWidget() && GetWidget()->ShouldPaintAsActive();
+     return GetColorProvider()->GetColor(
+@@ -621,7 +628,19 @@
+ 
+   // Update save tab group related items, the sync icon and attention
+   // indicator.
+-  sync_icon_->SetVisible(is_shared_);
++  // Browse: user groups in the sidebar are folders, shown with a folder icon
++  // (open while expanded). Automatic groups (ephemeral) get no icon.
++  const bool browse_folder =
++      orientation_ == TabStripOrientation::kVertical && !is_shared_ &&
++      delegate_->IsValid() && !delegate_->GetTabGroup().is_ephemeral();
++  sync_icon_->SetVisible(is_shared_ || browse_folder);
++  if (browse_folder) {
++    sync_icon_->SetImage(ui::ImageModel::FromVectorIcon(
++        tab_group_visual_data_.is_collapsed()
++            ? vector_icons::kFolderChromeRefreshOldIcon
++            : vector_icons::kFolderOpenIcon,
++        GetColorProvider()->GetColor(ui::kColorSysOnSurfaceSubtle), 16));
++  }
+   if (is_shared_) {
+     sync_icon_->SetImage(ui::ImageModel::FromVectorIcon(
+         features::IsRoundedIconsEnabled() ? kGroupCustomIcon
+@@ -657,7 +676,17 @@
+         foreground_color, kIconSize));
+   }
+ 
+-  // Update background.
++  // Update background. Browse: no chip in the sidebar; a soft highlight
++  // only while hovered or being edited.
++  if (orientation_ == TabStripOrientation::kVertical) {
++    const bool highlight = IsMouseHovered() || editor_bubble_tracker_.is_open();
++    SetBackground(highlight ? views::CreateRoundedRectBackground(
++                                  GetColorProvider()->GetColor(
++                                      ui::kColorSysStateHoverOnSubtle),
++                                  GetCornerRadius())
++                            : nullptr);
++    return;
++  }
+   SetBackground(
+       views::CreateRoundedRectBackground(background_color, GetCornerRadius()));
+ }

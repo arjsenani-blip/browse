@@ -1,0 +1,527 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn	2026-11-05 22:16:57.452786739 -0500
++++ src/chrome/browser/ui/BUILD.gn	2026-11-05 22:30:06.622946928 -0500
+@@ -3556,6 +3556,8 @@
+       "views/frame/browse_loading_bar_view.cc",
+       "views/frame/browse_loading_bar_view.h",
+       "views/frame/browse_space_indicator_view.cc",
++      "views/frame/browse_tab_organizer.cc",
++      "views/frame/browse_tab_organizer.h",
+       "views/frame/browse_space_indicator_view.h",
+       "views/frame/base_tab_strip_region_view.h",
+       "views/frame/browser_view.cc",
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_space_indicator_view.cc	2026-11-05 22:23:29.042274151 -0500
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc	2026-11-05 22:30:06.625062671 -0500
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
+ 
++#include "chrome/browser/ui/views/frame/browse_tab_organizer.h"
++
+ #include <algorithm>
+ #include <cmath>
+ #include <utility>
+@@ -359,6 +361,10 @@
+                                         base::Unretained(this))),
+       browser_view_(browser_view),
+       style_(style),
++      organizer_(style == Style::kSidebar
++                     ? std::make_unique<BrowseTabOrganizer>(
++                           browser_view->browser()->GetTabStripModel())
++                     : nullptr),
+       swipe_handler_(std::make_unique<SwipeHandler>(this)),
+       settle_delegate_(std::make_unique<SettleDelegate>(this)),
+       settle_animation_(
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_space_indicator_view.h	2026-11-05 22:23:29.037884572 -0500
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.h	2026-11-05 22:30:06.623939041 -0500
+@@ -23,6 +23,7 @@
+ #include "ui/menus/simple_menu_model.h"
+ #include "ui/views/controls/button/button.h"
+ 
++class BrowseTabOrganizer;
+ class BrowserView;
+ class Profile;
+ 
+@@ -137,6 +138,7 @@
+   std::vector<browse_spaces::Space> spaces_;
+   int current_index_ = -1;
+   Style style_ = Style::kTabStrip;
++  std::unique_ptr<BrowseTabOrganizer> organizer_;
+ 
+   float swipe_offset_ = 0;
+   float last_dx_ = 0;
+Index: src/chrome/browser/ui/views/frame/browse_tab_organizer.cc
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_tab_organizer.cc	2026-11-05 22:30:39.899557876 -0500
+@@ -0,0 +1,392 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/browse_tab_organizer.h"
++
++#include <set>
++#include <vector>
++
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/tabs/tab_group_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/tab_groups/tab_group_color.h"
++#include "components/tab_groups/tab_group_visual_data.h"
++#include "components/tabs/public/tab_group.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
++#include "url/gurl.h"
++
++namespace {
++
++constexpr int kMinTabsForSiteGroup = 3;
++constexpr base::TimeDelta kEarlierAfter = base::Hours(12);
++constexpr base::TimeDelta kDebounce = base::Milliseconds(900);
++constexpr base::TimeDelta kSlowInterval = base::Minutes(15);
++constexpr char16_t kEarlierTitle[] = u"Earlier";
++constexpr char16_t kCountSeparator[] = u" · ";
++
++GURL UrlAt(TabStripModel* model, int index) {
++  content::WebContents* contents = model->GetWebContentsAt(index);
++  return contents ? contents->GetLastCommittedURL() : GURL();
++}
++
++bool IsWebUrl(const GURL& url) {
++  return url.is_valid() && url.SchemeIsHTTPOrHTTPS() && !url.host().empty();
++}
++
++std::u16string Capitalized(const std::string& s) {
++  std::u16string out = base::UTF8ToUTF16(s);
++  if (!out.empty()) {
++    out[0] = base::ToUpperASCII(out[0]);
++  }
++  return out;
++}
++
++}  // namespace
++
++BrowseTabOrganizer::BrowseTabOrganizer(TabStripModel* model) : model_(model) {
++  model_->AddObserver(this);
++  slow_timer_.Start(FROM_HERE, kSlowInterval,
++                    base::BindRepeating(&BrowseTabOrganizer::Schedule,
++                                        base::Unretained(this)));
++  Schedule();
++}
++
++BrowseTabOrganizer::~BrowseTabOrganizer() {
++  if (model_) {
++    model_->RemoveObserver(this);
++  }
++}
++
++void BrowseTabOrganizer::OnTabStripModelDestroyed(TabStripModel* tab_strip_model) {
++  debounce_.Stop();
++  slow_timer_.Stop();
++  model_ = nullptr;
++}
++
++// static
++std::string BrowseTabOrganizer::SiteKeyFor(const GURL& url) {
++  if (!IsWebUrl(url)) {
++    return std::string();
++  }
++  std::string host(url.host());
++  if (base::StartsWith(host, "www.")) {
++    host = host.substr(4);
++  } else if (base::StartsWith(host, "m.")) {
++    host = host.substr(2);
++  }
++  const std::string registrable =
++      net::registry_controlled_domains::GetDomainAndRegistry(
++          url, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
++  if (registrable.empty() || host == registrable) {
++    return host;
++  }
++  // Keep product subdomains apart (docs.google.com vs mail.google.com), but
++  // fold language subdomains (en.wikipedia.org) into the site.
++  const std::string sub = host.substr(0, host.size() - registrable.size() - 1);
++  if (sub.size() == 2 || sub.find('.') != std::string::npos) {
++    return registrable;
++  }
++  return host;
++}
++
++// static
++std::u16string BrowseTabOrganizer::SiteNameFor(const GURL& url) {
++  const std::string key = SiteKeyFor(url);
++  if (key.empty()) {
++    return std::u16string();
++  }
++  const std::string registrable =
++      net::registry_controlled_domains::GetDomainAndRegistry(
++          url, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
++  if (!registrable.empty() && key != registrable &&
++      base::EndsWith(key, "." + registrable)) {
++    // Product subdomain: "docs.google.com" -> "Docs".
++    return Capitalized(key.substr(0, key.size() - registrable.size() - 1));
++  }
++  // "youtube.com" -> "Youtube".
++  const std::vector<std::string> parts = base::SplitString(
++      registrable.empty() ? key : registrable, ".", base::KEEP_WHITESPACE,
++      base::SPLIT_WANT_NONEMPTY);
++  return parts.empty() ? base::UTF8ToUTF16(key) : Capitalized(parts[0]);
++}
++
++void BrowseTabOrganizer::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  if (organizing_) {
++    return;
++  }
++  if (selection.active_tab_changed()) {
++    ReleaseActiveFromEarlier();
++  }
++  if (change.type() == TabStripModelChange::kInserted ||
++      change.type() == TabStripModelChange::kRemoved) {
++    Schedule();
++  }
++}
++
++void BrowseTabOrganizer::OnTabChangedAt(tabs::TabInterface* tab,
++                                        TabChangeType change_type) {
++  if (!organizing_ && change_type == TabChangeType::kAll) {
++    Schedule();  // URL or title changed.
++  }
++}
++
++void BrowseTabOrganizer::OnTabPinnedStateChanged(tabs::TabInterface* tab,
++                                                 int index) {
++  if (!organizing_) {
++    Schedule();
++  }
++}
++
++void BrowseTabOrganizer::Schedule() {
++  debounce_.Start(FROM_HERE, kDebounce,
++                  base::BindOnce(&BrowseTabOrganizer::Organize,
++                                 base::Unretained(this)));
++}
++
++bool BrowseTabOrganizer::IsOurs(const tab_groups::TabGroupId& group) const {
++  if (earlier_group_ && *earlier_group_ == group) {
++    return true;
++  }
++  for (const auto& [key, id] : site_groups_) {
++    if (id == group) {
++      return true;
++    }
++  }
++  return false;
++}
++
++void BrowseTabOrganizer::AdoptExistingGroups() {
++  adopted_ = true;
++  TabGroupModel* groups = model_->group_model();
++  if (!groups) {
++    return;
++  }
++  for (const tab_groups::TabGroupId& id : groups->ListTabGroups()) {
++    const TabGroup* group = groups->GetTabGroup(id);
++    const std::u16string& title = group->visual_data()->title();
++    if (title == kEarlierTitle) {
++      earlier_group_ = id;
++      continue;
++    }
++    const size_t sep = title.rfind(kCountSeparator);
++    unsigned count = 0;
++    if (sep == std::u16string::npos ||
++        !base::StringToUint(title.substr(sep + 3), &count)) {
++      continue;
++    }
++    const gfx::Range range = group->ListTabs();
++    if (range.is_empty()) {
++      continue;
++    }
++    const std::string key =
++        SiteKeyFor(UrlAt(model_, static_cast<int>(range.start())));
++    if (!key.empty() && !site_groups_.count(key)) {
++      site_groups_.insert_or_assign(key, id);
++    }
++  }
++}
++
++void BrowseTabOrganizer::Organize() {
++  if (!model_ || model_->closing_all() || model_->empty()) {
++    return;
++  }
++  organizing_ = true;
++  if (!adopted_) {
++    AdoptExistingGroups();
++  }
++  // Forget groups that no longer exist.
++  TabGroupModel* groups = model_->group_model();
++  if (!groups) {
++    organizing_ = false;
++    return;
++  }
++  for (auto it = site_groups_.begin(); it != site_groups_.end();) {
++    it = groups->ContainsTabGroup(it->second) ? std::next(it)
++                                              : site_groups_.erase(it);
++  }
++  if (earlier_group_ && !groups->ContainsTabGroup(*earlier_group_)) {
++    earlier_group_.reset();
++  }
++
++  OrganizeSites();
++  OrganizeEarlier();
++  organizing_ = false;
++}
++
++void BrowseTabOrganizer::UpdateSiteGroupTitle(
++    const std::string& key,
++    const tab_groups::TabGroupId& group_id) {
++  const TabGroup* group = model_->group_model()->GetTabGroup(group_id);
++  const gfx::Range range = group->ListTabs();
++  if (range.is_empty()) {
++    return;
++  }
++  const std::u16string title =
++      SiteNameFor(UrlAt(model_, static_cast<int>(range.start()))) +
++      kCountSeparator + base::NumberToString16(range.length());
++  const tab_groups::TabGroupVisualData* current = group->visual_data();
++  if (current->title() == title &&
++      current->color() == tab_groups::TabGroupColorId::kGrey) {
++    return;
++  }
++  model_->ChangeTabGroupVisuals(
++      group_id, tab_groups::TabGroupVisualData(
++                    title, tab_groups::TabGroupColorId::kGrey,
++                    current->is_collapsed()));
++}
++
++void BrowseTabOrganizer::OrganizeSites() {
++  TabGroupModel* groups = model_->group_model();
++
++  // 1. Tabs that navigated away from their site leave its group.
++  for (int i = model_->count() - 1; i >= 0; --i) {
++    const std::optional<tab_groups::TabGroupId> group =
++        model_->GetTabGroupForTab(i);
++    if (!group || (earlier_group_ && *group == *earlier_group_) ||
++        !IsOurs(*group)) {
++      continue;
++    }
++    const std::string key = SiteKeyFor(UrlAt(model_, i));
++    auto it = site_groups_.find(key);
++    if (it == site_groups_.end() || it->second != *group) {
++      model_->RemoveFromGroup({i});
++    }
++  }
++
++  // 2. Count tabs per site (ungrouped + already in that site's group).
++  std::map<std::string, int> counts;
++  for (int i = 0; i < model_->count(); ++i) {
++    if (model_->IsTabPinned(i)) {
++      continue;
++    }
++    const std::optional<tab_groups::TabGroupId> group =
++        model_->GetTabGroupForTab(i);
++    const std::string key = SiteKeyFor(UrlAt(model_, i));
++    if (key.empty()) {
++      continue;
++    }
++    auto it = site_groups_.find(key);
++    if (!group || (it != site_groups_.end() && it->second == *group)) {
++      ++counts[key];
++    }
++  }
++
++  // 3. Gather sites that reached the threshold.
++  for (const auto& [key, count] : counts) {
++    if (count < kMinTabsForSiteGroup) {
++      continue;
++    }
++    std::vector<int> loose;
++    for (int i = 0; i < model_->count(); ++i) {
++      if (!model_->IsTabPinned(i) && !model_->GetTabGroupForTab(i) &&
++          SiteKeyFor(UrlAt(model_, i)) == key) {
++        loose.push_back(i);
++      }
++    }
++    auto it = site_groups_.find(key);
++    if (it != site_groups_.end()) {
++      if (!loose.empty()) {
++        model_->AddToExistingGroup(loose, it->second);
++      }
++      UpdateSiteGroupTitle(key, it->second);
++      continue;
++    }
++    if (loose.empty()) {
++      continue;
++    }
++    const int active = model_->active_index();
++    const bool holds_active =
++        std::find(loose.begin(), loose.end(), active) != loose.end();
++    const tab_groups::TabGroupId id =
++        model_->AddToNewGroup(loose, /*is_ephemeral=*/true);
++    site_groups_.insert_or_assign(key, id);
++    const GURL url = UrlAt(model_, static_cast<int>(
++                                       groups->GetTabGroup(id)->ListTabs().start()));
++    model_->ChangeTabGroupVisuals(
++        id, tab_groups::TabGroupVisualData(
++                SiteNameFor(url) + kCountSeparator +
++                    base::NumberToString16(static_cast<int>(loose.size())),
++                tab_groups::TabGroupColorId::kGrey,
++                /*is_collapsed=*/!holds_active));
++  }
++
++  // 4. Groups that shrank to a single tab dissolve.
++  for (auto it = site_groups_.begin(); it != site_groups_.end();) {
++    const gfx::Range range = groups->GetTabGroup(it->second)->ListTabs();
++    if (range.length() < 2) {
++      std::vector<int> indices;
++      for (uint32_t i = range.start(); i < range.end(); ++i) {
++        indices.push_back(static_cast<int>(i));
++      }
++      if (!indices.empty()) {
++        model_->RemoveFromGroup(indices);
++      }
++      it = site_groups_.erase(it);
++      continue;
++    }
++    UpdateSiteGroupTitle(it->first, it->second);
++    ++it;
++  }
++}
++
++void BrowseTabOrganizer::ReleaseActiveFromEarlier() {
++  if (!model_ || !earlier_group_ || organizing_) {
++    return;
++  }
++  const int active = model_->active_index();
++  if (active == TabStripModel::kNoTab) {
++    return;
++  }
++  const std::optional<tab_groups::TabGroupId> group =
++      model_->GetTabGroupForTab(active);
++  if (group && *group == *earlier_group_) {
++    organizing_ = true;
++    model_->RemoveFromGroup({active});
++    organizing_ = false;
++  }
++}
++
++void BrowseTabOrganizer::OrganizeEarlier() {
++  const base::Time cutoff = base::Time::Now() - kEarlierAfter;
++  const int active = model_->active_index();
++  std::vector<int> stale;
++  for (int i = 0; i < model_->count(); ++i) {
++    if (i == active || model_->IsTabPinned(i) || model_->GetTabGroupForTab(i)) {
++      continue;
++    }
++    content::WebContents* contents = model_->GetWebContentsAt(i);
++    if (contents && contents->GetLastActiveTime() < cutoff) {
++      stale.push_back(i);
++    }
++  }
++  if (stale.empty()) {
++    return;
++  }
++  if (!earlier_group_) {
++    earlier_group_ = model_->AddToNewGroup(stale, /*is_ephemeral=*/true);
++    model_->ChangeTabGroupVisuals(
++        *earlier_group_,
++        tab_groups::TabGroupVisualData(kEarlierTitle,
++                                       tab_groups::TabGroupColorId::kGrey,
++                                       /*is_collapsed=*/true));
++  } else {
++    model_->AddToExistingGroup(stale, *earlier_group_, /*add_to_end=*/true);
++  }
++  // Keep "Earlier" at the bottom.
++  const gfx::Range range =
++      model_->group_model()->GetTabGroup(*earlier_group_)->ListTabs();
++  const int to_index = model_->count() - static_cast<int>(range.length());
++  if (static_cast<int>(range.start()) != to_index) {
++    model_->MoveGroupTo(*earlier_group_, to_index);
++  }
++}
+Index: src/chrome/browser/ui/views/frame/browse_tab_organizer.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_tab_organizer.h	2026-11-05 22:30:39.898914795 -0500
+@@ -0,0 +1,68 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_TAB_ORGANIZER_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_TAB_ORGANIZER_H_
++
++#include <map>
++#include <optional>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "base/timer/timer.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "components/tab_groups/tab_group_id.h"
++#include "url/gurl.h"
++
++class TabStripModel;
++
++// Browse: keeps a long sidebar readable.
++//  - Three or more unpinned tabs from the same site are gathered into a
++//    collapsible grey group titled "Site · N".
++//  - Tabs not used for 12 hours move into a collapsed "Earlier" group at the
++//    bottom; using one brings it back out.
++// Only groups Browse made are touched; the user's own groups are left alone.
++// Work is debounced and runs on tab changes plus a slow 15 minute timer.
++class BrowseTabOrganizer : public TabStripModelObserver {
++ public:
++  explicit BrowseTabOrganizer(TabStripModel* model);
++  BrowseTabOrganizer(const BrowseTabOrganizer&) = delete;
++  BrowseTabOrganizer& operator=(const BrowseTabOrganizer&) = delete;
++  ~BrowseTabOrganizer() override;
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++  void OnTabChangedAt(tabs::TabInterface* tab,
++                      TabChangeType change_type) override;
++  void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
++  void OnTabStripModelDestroyed(TabStripModel* tab_strip_model) override;
++
++  // Site key and display name for a URL ("docs.google.com" -> "Docs").
++  static std::string SiteKeyFor(const GURL& url);
++  static std::u16string SiteNameFor(const GURL& url);
++
++ private:
++  void Schedule();
++  void Organize();
++  void AdoptExistingGroups();
++  bool IsOurs(const tab_groups::TabGroupId& group) const;
++  void UpdateSiteGroupTitle(const std::string& key,
++                            const tab_groups::TabGroupId& group);
++  void OrganizeSites();
++  void OrganizeEarlier();
++  void ReleaseActiveFromEarlier();
++
++  raw_ptr<TabStripModel> model_;
++  std::map<std::string, tab_groups::TabGroupId> site_groups_;
++  std::optional<tab_groups::TabGroupId> earlier_group_;
++  bool organizing_ = false;
++  bool adopted_ = false;
++  base::OneShotTimer debounce_;
++  base::RepeatingTimer slow_timer_;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_TAB_ORGANIZER_H_

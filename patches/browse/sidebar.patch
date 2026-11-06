@@ -1,0 +1,421 @@
+Index: src/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+===================================================================
+--- src.orig/chrome/browser/ui/cocoa/accelerators_cocoa.mm	2026-11-05 06:13:59.129975335 -0500
++++ src/chrome/browser/ui/cocoa/accelerators_cocoa.mm	2026-11-05 22:23:29.046966713 -0500
+@@ -49,6 +49,9 @@
+     {IDC_PRINT, ui::EF_COMMAND_DOWN, ui::VKEY_P},
+     {IDC_RESTORE_TAB, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_T},
+     {IDC_CTRL_S_SHORTCUT, ui::EF_COMMAND_DOWN, ui::VKEY_S},
++    // Browse: Shift+Cmd+S toggles the sidebar.
++    {IDC_TOGGLE_VERTICAL_TABS, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
++     ui::VKEY_S},
+     {IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN,
+      ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_L},
+     {IDC_SHOW_BOOKMARK_BAR, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
+Index: src/chrome/browser/ui/layout_constants.cc
+===================================================================
+--- src.orig/chrome/browser/ui/layout_constants.cc	2026-11-05 06:13:47.262390816 -0500
++++ src/chrome/browser/ui/layout_constants.cc	2026-11-05 22:24:22.877076836 -0500
+@@ -153,7 +153,7 @@
+     case LayoutConstant::kVerticalTabCornerRadius:
+       return 8;
+     case LayoutConstant::kVerticalTabHeight:
+-      return 30;
++      return 28;  // Browse: compact one-line rows.
+     case LayoutConstant::kVerticalTabPinnedHeight:
+       return 30;
+     case LayoutConstant::kVerticalTabMinWidth:
+Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc	2026-11-05 06:13:48.583041157 -0500
++++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc	2026-11-05 22:23:29.046013888 -0500
+@@ -32,8 +32,9 @@
+   registry->RegisterIntegerPref(prefs::kVerticalTabsUncollapsedWidth,
+                                 kVerticalTabStripDefaultUncollapsedWidth);
+ 
++  // Browse: the sidebar is the default layout.
+   registry->RegisterIntegerPref(prefs::kHeliumLayout,
+-                                std::to_underlying(HeliumLayoutType::kClassic));
++                                std::to_underlying(HeliumLayoutType::kVertical));
+   registry->RegisterBooleanPref(prefs::kHeliumVerticalRightAligned, false);
+   registry->RegisterBooleanPref(prefs::kHeliumZenMode, false);
+   registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, false);
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_space_indicator_view.cc	2026-11-05 22:06:12.061011166 -0500
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.cc	2026-11-05 22:23:29.042274151 -0500
+@@ -37,6 +37,12 @@
+ #include "ui/views/controls/menu/menu_runner.h"
+ #include "ui/views/view_utils.h"
+ #include "ui/views/widget/widget.h"
++#include "base/strings/string_util.h"
++#include "chrome/app/vector_icons/vector_icons.h"
++#include "components/vector_icons/vector_icons.h"
++#include "ui/gfx/color_utils.h"
++#include "ui/gfx/paint_vector_icon.h"
++#include "cc/paint/paint_shader.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include <CoreFoundation/CoreFoundation.h>
+@@ -119,6 +125,38 @@
+ }
+ }  // namespace
+ 
++const gfx::VectorIcon& IconForSpace(const Space& space, int index) {
++  const std::u16string name = base::ToLowerASCII(space.name);
++  auto has = [&](const char16_t* word) {
++    return name.find(word) != std::u16string::npos;
++  };
++  if (has(u"school") || has(u"class") || has(u"study")) {
++    return kMenuBookIcon;
++  }
++  if (has(u"debate") || has(u"speech")) {
++    return vector_icons::kMicIcon;
++  }
++  if (has(u"dev") || has(u"code") || has(u"web")) {
++    return kCodeIcon;
++  }
++  if (has(u"h4h") || has(u"home") || has(u"habitat") || has(u"house")) {
++    return kHomeIcon;
++  }
++  if (has(u"amma") || has(u"mom") || has(u"family") || has(u"mum")) {
++    return vector_icons::kFamilyLinkIcon;
++  }
++  if (has(u"work") || has(u"job")) {
++    return vector_icons::kWorkIcon;
++  }
++  if (has(u"personal") || has(u"me") || index == 0) {
++    return kPersonFilledIcon;
++  }
++  static constexpr const gfx::VectorIcon* kFallback[] = {
++      &kGlobeIcon, &vector_icons::kLightbulbIcon, &kRocketLaunchIcon};
++  return *kFallback[static_cast<size_t>(std::max(index, 0)) %
++                    std::size(kFallback)];
++}
++
+ SkColor ColorForIndex(int index) {
+   return kGradients[GradientSlot(index)][0];
+ }
+@@ -173,6 +211,11 @@
+ 
+ constexpr int kHorizontalPadding = 8;
+ constexpr int kMinWidth = 44;
++constexpr int kSidebarHeight = 36;
++constexpr int kSidebarCell = 28;
++constexpr int kSidebarGap = 2;
++constexpr int kSidebarIcon = 16;
++constexpr int kSidebarLeft = 4;
+ constexpr int kDotDiameter = 4;
+ constexpr int kDotGap = 4;
+ constexpr int kNameDotGap = 3;
+@@ -310,10 +353,12 @@
+   raw_ptr<BrowseSpaceIndicatorView> owner_;
+ };
+ 
+-BrowseSpaceIndicatorView::BrowseSpaceIndicatorView(BrowserView* browser_view)
++BrowseSpaceIndicatorView::BrowseSpaceIndicatorView(BrowserView* browser_view,
++                                                   Style style)
+     : views::Button(base::BindRepeating(&BrowseSpaceIndicatorView::OnPressed,
+                                         base::Unretained(this))),
+       browser_view_(browser_view),
++      style_(style),
+       swipe_handler_(std::make_unique<SwipeHandler>(this)),
+       settle_delegate_(std::make_unique<SettleDelegate>(this)),
+       settle_animation_(
+@@ -396,6 +441,16 @@
+ 
+ gfx::Size BrowseSpaceIndicatorView::CalculatePreferredSize(
+     const views::SizeBounds& available_size) const {
++  if (style_ == Style::kSidebar) {
++    int name_width = 0;
++    for (const auto& space : spaces_) {
++      name_width = std::max(name_width,
++                            gfx::GetStringWidth(space.name, NameFont()));
++    }
++    const int count = static_cast<int>(spaces_.size());
++    return gfx::Size(count * (kSidebarCell + kSidebarGap) + name_width + 16,
++                     kSidebarHeight);
++  }
+   int width = kMinWidth;
+   for (const auto& space : spaces_) {
+     width = std::max(width, gfx::GetStringWidth(space.name, NameFont()) +
+@@ -415,6 +470,10 @@
+   if (spaces_.empty() || current_index_ < 0) {
+     return;
+   }
++  if (style_ == Style::kSidebar) {
++    PaintSidebar(canvas);
++    return;
++  }
+   const ui::ColorProvider* cp = GetColorProvider();
+   const SkColor text_color = cp->GetColor(ui::kColorSysOnSurfaceSubtle);
+ 
+@@ -477,6 +536,102 @@
+   }
+ }
+ 
++int BrowseSpaceIndicatorView::SidebarIconIndexAt(int x) const {
++  const int i = (x - kSidebarLeft) / (kSidebarCell + kSidebarGap);
++  if (x < kSidebarLeft || i < 0 || i >= static_cast<int>(spaces_.size())) {
++    return -1;
++  }
++  return i;
++}
++
++void BrowseSpaceIndicatorView::PaintSidebar(gfx::Canvas* canvas) {
++  const ui::ColorProvider* cp = GetColorProvider();
++  const SkColor strong = cp->GetColor(ui::kColorSysOnSurface);
++  const SkColor subtle = cp->GetColor(ui::kColorSysOnSurfaceSubtle);
++  const bool dark = color_utils::IsDark(cp->GetColor(ui::kColorSysSurface));
++  const gfx::Rect bounds = GetLocalBounds();
++  const int count = static_cast<int>(spaces_.size());
++  const int cy = bounds.height() / 2;
++
++  // The highlight glides from the current icon towards the target.
++  const float progress = std::clamp(swipe_progress(), -1.f, 1.f);
++  const int target = progress < 0 ? current_index_ + 1 : current_index_ - 1;
++  const float t = (target >= 0 && target < count) ? std::abs(progress) : 0.f;
++  const float from_x = kSidebarLeft + current_index_ * (kSidebarCell + kSidebarGap);
++  const float to_x = kSidebarLeft + std::clamp(target, 0, count - 1) *
++                                        (kSidebarCell + kSidebarGap);
++  const float hx = from_x + (to_x - from_x) * t;
++  const gfx::RectF cell(hx, cy - kSidebarCell / 2.f, kSidebarCell, kSidebarCell);
++  cc::PaintFlags fill;
++  fill.setAntiAlias(true);
++  fill.setColor(dark ? SkColorSetA(SK_ColorWHITE, 0x1F)
++                     : SkColorSetA(SK_ColorWHITE, 0xE6));
++  canvas->DrawRoundRect(cell, 8, fill);
++
++  // Neon gradient underline under the highlighted icon.
++  const int accent_index =
++      t > 0.5f ? std::clamp(target, 0, count - 1) : current_index_;
++  const SkPoint points[2] = {SkPoint::Make(cell.x() + 9, 0),
++                             SkPoint::Make(cell.right() - 9, 0)};
++  const SkColor4f colors[2] = {
++      SkColor4f::FromColor(browse_spaces::ColorForIndex(accent_index)),
++      SkColor4f::FromColor(browse_spaces::GradientEndForIndex(accent_index))};
++  cc::PaintFlags line;
++  line.setAntiAlias(true);
++  line.setShader(cc::PaintShader::MakeLinearGradient(points, colors, nullptr, 2,
++                                                     SkTileMode::kClamp));
++  canvas->DrawRoundRect(
++      gfx::RectF(cell.x() + 9, cell.bottom() - 5, kSidebarCell - 18, 2), 1,
++      line);
++
++  for (int i = 0; i < count; ++i) {
++    float emphasis = 0.f;
++    if (i == current_index_) {
++      emphasis = 1.f - t;
++    } else if (i == target) {
++      emphasis = t;
++    }
++    const SkColor color = color_utils::AlphaBlend(strong, subtle, emphasis);
++    const gfx::ImageSkia icon = gfx::CreateVectorIcon(
++        browse_spaces::IconForSpace(spaces_[i], i), kSidebarIcon,
++        SkColorSetA(color, static_cast<U8CPU>(255 * (0.55f + 0.45f * emphasis))));
++    const int x = kSidebarLeft + i * (kSidebarCell + kSidebarGap) +
++                  (kSidebarCell - kSidebarIcon) / 2;
++    canvas->DrawImageInt(icon, x, cy - kSidebarIcon / 2);
++  }
++
++  // Name on the right; follows the fingers like the tab strip label.
++  const int name_left = kSidebarLeft + count * (kSidebarCell + kSidebarGap) + 8;
++  const gfx::Rect name_area(name_left, 0, std::max(0, bounds.width() - name_left - 6),
++                            bounds.height());
++  if (name_area.width() <= 0) {
++    return;
++  }
++  canvas->Save();
++  canvas->ClipRect(name_area);
++  const int shift = std::lround(progress * name_area.width());
++  auto draw_name = [&](int index, int x_offset) {
++    if (index < 0 || index >= count) {
++      return;
++    }
++    gfx::Rect r = name_area;
++    r.Offset(x_offset, 0);
++    const float fade = 1.f - std::min(1.f, std::abs(x_offset) /
++                                               static_cast<float>(r.width()));
++    canvas->DrawStringRectWithFlags(
++        spaces_[index].name, NameFont(),
++        SkColorSetA(subtle, static_cast<U8CPU>(SkColorGetA(subtle) * fade)), r,
++        gfx::Canvas::TEXT_ALIGN_RIGHT | gfx::Canvas::NO_SUBPIXEL_RENDERING);
++  };
++  draw_name(current_index_, shift);
++  if (shift < 0) {
++    draw_name(current_index_ + 1, shift + name_area.width());
++  } else if (shift > 0) {
++    draw_name(current_index_ - 1, shift - name_area.width());
++  }
++  canvas->Restore();
++}
++
+ void BrowseSpaceIndicatorView::OnSwipeBegin() {
+   settle_animation_->Stop();
+   RefreshSpaces();
+@@ -559,8 +714,18 @@
+   browse_spaces::SwitchToSpace(browser_view_, spaces_[target].path);
+ }
+ 
+-void BrowseSpaceIndicatorView::OnPressed() {
++void BrowseSpaceIndicatorView::OnPressed(const ui::Event& event) {
+   RefreshSpaces();
++  if (style_ == Style::kSidebar && event.IsLocatedEvent()) {
++    const int index =
++        SidebarIconIndexAt(event.AsLocatedEvent()->location().x());
++    if (index >= 0) {
++      if (index != current_index_) {
++        browse_spaces::SwitchToSpace(browser_view_, spaces_[index].path);
++      }
++      return;
++    }
++  }
+   menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
+   for (size_t i = 0; i < spaces_.size(); ++i) {
+     menu_model_->AddCheckItem(static_cast<int>(i), spaces_[i].name);
+Index: src/chrome/browser/ui/views/frame/browse_space_indicator_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browse_space_indicator_view.h	2026-11-05 22:06:12.062202950 -0500
++++ src/chrome/browser/ui/views/frame/browse_space_indicator_view.h	2026-11-05 22:23:29.037884572 -0500
+@@ -10,6 +10,7 @@
+ #include <vector>
+ 
+ #include "base/files/file_path.h"
++#include "ui/gfx/vector_icon_types.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "chrome/browser/profiles/profile_attributes_storage.h"
+@@ -47,6 +48,9 @@
+ // Index of `profile` in `spaces`, or -1.
+ int IndexOfProfile(const std::vector<Space>& spaces, Profile* profile);
+ 
++// Icon for a space, chosen from its name (falls back by index).
++const gfx::VectorIcon& IconForSpace(const Space& space, int index);
++
+ // Default palette, picked by space index.
+ SkColor ColorForIndex(int index);
+ 
+@@ -65,7 +69,13 @@
+   METADATA_HEADER(BrowseSpaceIndicatorView, views::Button)
+ 
+  public:
+-  explicit BrowseSpaceIndicatorView(BrowserView* browser_view);
++  enum class Style {
++    kTabStrip,  // Name over a row of dots, after the traffic lights.
++    kSidebar,   // Row of space icons + name, at the bottom of the sidebar.
++  };
++
++  explicit BrowseSpaceIndicatorView(BrowserView* browser_view,
++                                    Style style = Style::kTabStrip);
+   BrowseSpaceIndicatorView(const BrowseSpaceIndicatorView&) = delete;
+   BrowseSpaceIndicatorView& operator=(const BrowseSpaceIndicatorView&) =
+       delete;
+@@ -108,7 +118,9 @@
+   void OnSettleEnded();
+ 
+   void RefreshSpaces();
+-  void OnPressed();
++  void OnPressed(const ui::Event& event);
++  void PaintSidebar(gfx::Canvas* canvas);
++  int SidebarIconIndexAt(int x) const;
+   void SwitchBy(int delta);
+ 
+   // Swipe state. `swipe_offset_` is in DIPs; positive means the content has
+@@ -124,6 +136,7 @@
+ 
+   std::vector<browse_spaces::Space> spaces_;
+   int current_index_ = -1;
++  Style style_ = Style::kTabStrip;
+ 
+   float swipe_offset_ = 0;
+   float last_dx_ = 0;
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc	2026-11-05 06:13:51.394820207 -0500
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc	2026-11-05 22:23:29.044847865 -0500
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ 
++#include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
++
+ #include <algorithm>
+ #include <optional>
+ #include <utility>
+@@ -159,6 +161,18 @@
+   gemini_button_ =
+       content_area_view_->AddChildView(std::make_unique<views::View>());
+ 
++  // Browse: space switcher at the bottom of the sidebar.
++  if (BrowseSpaceIndicatorView::ShouldShowFor(browser_view)) {
++    auto* spaces = content_area_view_->AddChildView(
++        std::make_unique<BrowseSpaceIndicatorView>(
++            browser_view, BrowseSpaceIndicatorView::Style::kSidebar));
++    spaces->SetProperty(
++        views::kMarginsKey,
++        gfx::Insets::TLBR(4, region_horizontal_padding, 6,
++                          region_horizontal_padding));
++    spaces->AttachSwipeHandlerTo(this);
++  }
++
+   // Views that go into the content area above
+   // --------------
+ 
+Index: src/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc	2026-11-05 06:13:51.401041266 -0500
++++ src/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc	2026-11-05 22:25:37.569547961 -0500
+@@ -26,6 +26,10 @@
+ #include "ui/gfx/scoped_canvas.h"
+ #include "ui/views/view_utils.h"
+ #include "ui/views/widget/widget.h"
++#include "absl/cleanup/cleanup.h"
++#include "cc/paint/paint_shader.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
+ 
+ VerticalTabStyleViews::VerticalTabStyleViews(
+     std::unique_ptr<TabStyleViewDelegate> delegate)
+@@ -77,7 +81,42 @@
+   return std::nullopt;
+ }
+ 
++namespace {
++// Browse: thin neon gradient bar on the left edge of the active tab.
++void PaintBrowseAccent(const TabStyleViewDelegate* delegate,
++                       gfx::Canvas* canvas) {
++  BrowserWindowInterface* browser = delegate->GetBrowserWindowInterface();
++  if (!browser) {
++    return;
++  }
++  const std::vector<browse_spaces::Space> spaces = browse_spaces::GetSpaces();
++  const int index = std::max(
++      0, browse_spaces::IndexOfProfile(spaces, browser->GetProfile()));
++  const gfx::Rect bounds = delegate->GetView()->GetLocalBounds();
++  const float top = bounds.y() + 8.f;
++  const float bottom = bounds.bottom() - 8.f;
++  if (bottom <= top) {
++    return;
++  }
++  const SkPoint points[2] = {SkPoint::Make(0, top), SkPoint::Make(0, bottom)};
++  const SkColor4f colors[2] = {
++      SkColor4f::FromColor(browse_spaces::ColorForIndex(index)),
++      SkColor4f::FromColor(browse_spaces::GradientEndForIndex(index))};
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  flags.setShader(cc::PaintShader::MakeLinearGradient(points, colors, nullptr,
++                                                      2, SkTileMode::kClamp));
++  canvas->DrawRoundRect(gfx::RectF(bounds.x() + 3.f, top, 2.f, bottom - top),
++                        1.f, flags);
++}
++}  // namespace
++
+ void VerticalTabStyleViews::PaintTab(gfx::Canvas* canvas) const {
++  absl::Cleanup accent = [this, canvas] {
++    if (GetSelectionState() == TabStyle::TabSelectionState::kActive) {
++      PaintBrowseAccent(delegate_.get(), canvas);
++    }
++  };
+   if (helium::ShouldUseNativeFrameMaterials(
+           delegate_->GetBrowserWindowInterface())) {
+     PaintTabBackgroundFill(canvas, GetSelectionState(),

@@ -1,0 +1,303 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn	2026-11-05 22:30:06.622946928 -0500
++++ src/chrome/browser/ui/BUILD.gn	2026-11-05 22:34:05.536736461 -0500
+@@ -3556,6 +3556,8 @@
+       "views/frame/browse_loading_bar_view.cc",
+       "views/frame/browse_loading_bar_view.h",
+       "views/frame/browse_space_indicator_view.cc",
++      "views/frame/browse_tab_filter_view.cc",
++      "views/frame/browse_tab_filter_view.h",
+       "views/frame/browse_tab_organizer.cc",
+       "views/frame/browse_tab_organizer.h",
+       "views/frame/browse_space_indicator_view.h",
+Index: src/chrome/browser/ui/views/frame/browse_tab_filter_view.cc
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_tab_filter_view.cc	2026-11-05 22:34:05.534831693 -0500
+@@ -0,0 +1,178 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/browse_tab_filter_view.h"
++
++#include "base/i18n/case_conversion.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "cc/paint/paint_flags.h"
++#include "chrome/browser/ui/tabs/tab_data.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/tabs/common/tab_group_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_view.h"
++#include "components/vector_icons/vector_icons.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/color_utils.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/paint_vector_icon.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/view_utils.h"
++
++namespace {
++constexpr int kHeight = 28;
++constexpr int kRadius = 8;
++constexpr int kIconSize = 14;
++constexpr int kMinWidthToShow = 120;  // Collapsed sidebar: hide.
++}  // namespace
++
++BrowseTabFilterView::BrowseTabFilterView(views::View* sidebar,
++                                         TabStripModel* model)
++    : sidebar_(sidebar), model_(model) {
++  field_ = AddChildView(std::make_unique<views::Textfield>());
++  field_->set_controller(this);
++  field_->SetBorder(nullptr);
++  field_->SetBackground(nullptr);
++  field_->GetViewAccessibility().SetName(u"Filter tabs");
++  model_->AddObserver(this);
++  UpdatePlaceholder();
++}
++
++BrowseTabFilterView::~BrowseTabFilterView() {
++  if (model_) {
++    model_->RemoveObserver(this);
++  }
++}
++
++gfx::Size BrowseTabFilterView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  return gfx::Size(kMinWidthToShow, kHeight);
++}
++
++void BrowseTabFilterView::Layout(PassKey) {
++  const bool show = width() >= kMinWidthToShow;
++  field_->SetVisible(show);
++  const int left = 8 + kIconSize + 6;
++  field_->SetBounds(left, 0, std::max(0, width() - left - 8), height());
++}
++
++void BrowseTabFilterView::OnPaint(gfx::Canvas* canvas) {
++  if (width() < kMinWidthToShow) {
++    return;
++  }
++  const ui::ColorProvider* cp = GetColorProvider();
++  const bool dark = color_utils::IsDark(cp->GetColor(ui::kColorSysSurface));
++  cc::PaintFlags fill;
++  fill.setAntiAlias(true);
++  fill.setColor(dark ? SkColorSetA(SK_ColorWHITE, 0x10)
++                     : SkColorSetA(SK_ColorBLACK, 0x09));
++  canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), kRadius, fill);
++  const gfx::ImageSkia icon =
++      gfx::CreateVectorIcon(vector_icons::kSearchIcon, kIconSize,
++                            cp->GetColor(ui::kColorSysOnSurfaceSubtle));
++  canvas->DrawImageInt(icon, 8, (height() - kIconSize) / 2);
++}
++
++void BrowseTabFilterView::UpdatePlaceholder() {
++  const int count = model_ ? model_->count() : 0;
++  field_->SetPlaceholderText(
++      count > 1 ? u"Filter " + base::NumberToString16(count) + u" tabs"
++                : std::u16string(u"Filter tabs"));
++}
++
++void BrowseTabFilterView::ContentsChanged(views::Textfield* sender,
++                                          const std::u16string& new_contents) {
++  ApplyFilter();
++}
++
++bool BrowseTabFilterView::HandleKeyEvent(views::Textfield* sender,
++                                         const ui::KeyEvent& key_event) {
++  if (key_event.type() == ui::EventType::kKeyPressed &&
++      key_event.key_code() == ui::VKEY_ESCAPE) {
++    field_->SetText(std::u16string());
++    ClearFilter();
++    return true;
++  }
++  return false;
++}
++
++void BrowseTabFilterView::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  UpdatePlaceholder();
++  if (!field_->GetText().empty()) {
++    ApplyFilter();  // New tab views need filtering too.
++  }
++}
++
++void BrowseTabFilterView::OnTabChangedAt(tabs::TabInterface* tab,
++                                         TabChangeType change_type) {
++  if (!field_->GetText().empty() && change_type == TabChangeType::kAll) {
++    ApplyFilter();
++  }
++}
++
++void BrowseTabFilterView::OnTabStripModelDestroyed(
++    TabStripModel* tab_strip_model) {
++  model_ = nullptr;
++}
++
++void BrowseTabFilterView::Hide(views::View* view) {
++  if (!view->GetVisible()) {
++    return;
++  }
++  view->SetVisible(false);
++  hidden_.push_back(std::make_unique<views::ViewTracker>(view));
++}
++
++void BrowseTabFilterView::ClearFilter() {
++  for (const auto& tracker : hidden_) {
++    if (views::View* view = tracker->view()) {
++      view->SetVisible(true);
++    }
++  }
++  hidden_.clear();
++}
++
++bool BrowseTabFilterView::FilterSubtree(views::View* view,
++                                        const std::u16string& query) {
++  if (auto* tab = views::AsViewClass<TabView>(view)) {
++    const tabs::TabData& data = tab->data();
++    const bool match =
++        base::i18n::ToLower(data.title).find(query) != std::u16string::npos ||
++        base::i18n::ToLower(base::UTF8ToUTF16(data.last_committed_url.spec()))
++                .find(query) != std::u16string::npos;
++    if (!match) {
++      Hide(tab);
++    }
++    return match;
++  }
++  bool any = false;
++  for (views::View* child : view->children()) {
++    any |= FilterSubtree(child, query);
++  }
++  if (!any && views::IsViewClass<TabGroupView>(view)) {
++    Hide(view);  // No matching tab inside: hide the whole group.
++  }
++  return any;
++}
++
++void BrowseTabFilterView::ApplyFilter() {
++  ClearFilter();
++  const std::u16string query = base::i18n::ToLower(field_->GetText());
++  if (query.empty() || !sidebar_) {
++    return;
++  }
++  FilterSubtree(sidebar_, query);
++}
++
++BEGIN_METADATA(BrowseTabFilterView)
++END_METADATA
+Index: src/chrome/browser/ui/views/frame/browse_tab_filter_view.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ src/chrome/browser/ui/views/frame/browse_tab_filter_view.h	2026-11-05 22:34:05.534211180 -0500
+@@ -0,0 +1,71 @@
++// Copyright 2026 The Browse Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_TAB_FILTER_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_TAB_FILTER_VIEW_H_
++
++#include <memory>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "ui/views/controls/textfield/textfield_controller.h"
++#include "ui/views/view.h"
++#include "ui/views/view_tracker.h"
++
++class TabStripModel;
++
++namespace views {
++class Textfield;
++}
++
++// Browse: quiet "Filter N tabs" field at the top of the sidebar. Typing hides
++// tabs whose title and address don't match, live; Esc or clearing the field
++// brings everything back. Hidden while the sidebar is collapsed to icons.
++class BrowseTabFilterView : public views::View,
++                            public views::TextfieldController,
++                            public TabStripModelObserver {
++  METADATA_HEADER(BrowseTabFilterView, views::View)
++
++ public:
++  BrowseTabFilterView(views::View* sidebar, TabStripModel* model);
++  BrowseTabFilterView(const BrowseTabFilterView&) = delete;
++  BrowseTabFilterView& operator=(const BrowseTabFilterView&) = delete;
++  ~BrowseTabFilterView() override;
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  void Layout(PassKey) override;
++  void OnPaint(gfx::Canvas* canvas) override;
++
++  // views::TextfieldController:
++  void ContentsChanged(views::Textfield* sender,
++                       const std::u16string& new_contents) override;
++  bool HandleKeyEvent(views::Textfield* sender,
++                      const ui::KeyEvent& key_event) override;
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++  void OnTabChangedAt(tabs::TabInterface* tab,
++                      TabChangeType change_type) override;
++  void OnTabStripModelDestroyed(TabStripModel* tab_strip_model) override;
++
++ private:
++  void UpdatePlaceholder();
++  void ApplyFilter();
++  void ClearFilter();
++  bool FilterSubtree(views::View* view, const std::u16string& query);
++  void Hide(views::View* view);
++
++  raw_ptr<views::View> sidebar_;
++  raw_ptr<TabStripModel> model_;
++  raw_ptr<views::Textfield> field_ = nullptr;
++  std::vector<std::unique_ptr<views::ViewTracker>> hidden_;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSE_TAB_FILTER_VIEW_H_
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc	2026-11-05 22:23:29.044847865 -0500
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc	2026-11-05 22:34:05.538906373 -0500
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ 
+ #include "chrome/browser/ui/views/frame/browse_space_indicator_view.h"
++#include "chrome/browser/ui/views/frame/browse_tab_filter_view.h"
+ 
+ #include <algorithm>
+ #include <optional>
+@@ -161,6 +162,18 @@
+   gemini_button_ =
+       content_area_view_->AddChildView(std::make_unique<views::View>());
+ 
++  // Browse: quiet filter field at the top of the sidebar.
++  if (BrowseSpaceIndicatorView::ShouldShowFor(browser_view)) {
++    auto* filter = content_area_view_->AddChildViewAt(
++        std::make_unique<BrowseTabFilterView>(
++            this, browser_view->browser()->GetTabStripModel()),
++        0);
++    filter->SetProperty(
++        views::kMarginsKey,
++        gfx::Insets::TLBR(2, region_horizontal_padding, 8,
++                          region_horizontal_padding));
++  }
++
+   // Browse: space switcher at the bottom of the sidebar.
+   if (BrowseSpaceIndicatorView::ShouldShowFor(browser_view)) {
+     auto* spaces = content_area_view_->AddChildView(
