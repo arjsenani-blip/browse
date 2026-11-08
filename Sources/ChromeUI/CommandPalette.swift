@@ -174,7 +174,9 @@ struct PaletteView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.palette, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Tokens.Radius.palette, style: .continuous).stroke(.separator.opacity(0.6), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.25), radius: 30, y: 14)
+        .shadow(color: .black.opacity(0.22), radius: 28, y: 16)
+        .shadow(color: .black.opacity(0.10), radius: 4, y: 2)
+        .padding(48)
         .onKeyPress(.downArrow) { model.move(1); return .handled }
         .onKeyPress(.upArrow) { model.move(-1); return .handled }
         .onKeyPress(.escape) { model.onDismiss?(); return .handled }
@@ -254,6 +256,7 @@ public final class PaletteController {
     private weak var window: NSWindow?
     /// The model only references its source weakly; the controller owns it while open.
     private var source: PaletteDataSource?
+    private var paletteView: NSView?
 
     public init() {}
 
@@ -277,18 +280,19 @@ public final class PaletteController {
         content.addSubview(scrim)
         let hosting = NSHostingView(rootView: PaletteView(model: model))
         hosting.translatesAutoresizingMaskIntoConstraints = false
-        scrim.addSubview(hosting)
+        content.addSubview(hosting)
         NSLayoutConstraint.activate([
             scrim.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scrim.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scrim.topAnchor.constraint(equalTo: content.topAnchor),
             scrim.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            hosting.centerXAnchor.constraint(equalTo: scrim.centerXAnchor),
-            hosting.leadingAnchor.constraint(greaterThanOrEqualTo: scrim.leadingAnchor, constant: 12),
-            hosting.trailingAnchor.constraint(lessThanOrEqualTo: scrim.trailingAnchor, constant: -12),
-            hosting.centerYAnchor.constraint(equalTo: scrim.centerYAnchor, constant: -content.bounds.height * 0.12),
+            hosting.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            hosting.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 12),
+            hosting.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12),
+            hosting.centerYAnchor.constraint(equalTo: content.centerYAnchor, constant: -content.bounds.height * 0.12),
         ])
         host = scrim
+        paletteView = hosting
         scrim.alphaValue = 0
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = Tokens.Motion.duration(0.16)
@@ -299,13 +303,16 @@ public final class PaletteController {
     public func dismiss() {
         guard let host else { return }
         self.host = nil
+        let palette = paletteView
+        paletteView = nil
         model.dataSource = nil
         source = nil
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = Tokens.Motion.duration(0.12)
             host.animator().alphaValue = 0
+            palette?.animator().alphaValue = 0
         }, completionHandler: {
-            MainActor.assumeIsolated { host.removeFromSuperview() }
+            MainActor.assumeIsolated { host.removeFromSuperview(); palette?.removeFromSuperview() }
         })
         window?.makeFirstResponder(window?.contentView)
     }
