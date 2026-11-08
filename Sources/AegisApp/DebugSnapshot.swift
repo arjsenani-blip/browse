@@ -36,6 +36,13 @@ enum DebugSnapshot {
                 c.refresh()
             }
             if args.contains("--reader") { services.frontController?.toggleReader() }
+            if let e = args.firstIndex(of: "--eval"), e + 1 < args.count,
+               let c = services.frontController, let id = c.store.selectedTab?.id, let web = c.runtime.tab(id)?.webView {
+                Task {
+                    let r = try? await web.evaluateJavaScript(args[e + 1])
+                    print("EVAL \(r.map { "\($0)" } ?? "nil")"); fflush(stdout)
+                }
+            }
             if args.contains("--memory") {
                 Task {
                     print("MEM before: live=\(services.runtime.liveCount) app=\(footprintMB()) MB")
@@ -46,14 +53,9 @@ enum DebugSnapshot {
                     print("MEM after sleep: live=\(services.runtime.liveCount) app=\(footprintMB()) MB")
                 }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + (args.contains("--memory") ? 12 : 1.5)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (args.firstIndex(of: "--settle").flatMap { Double(args[$0 + 1]) } ?? (args.contains("--memory") ? 12 : 1.5))) {
                 Task {
                     if args.contains("--resources") { await printResources(services: services) }
-                    if let e = args.firstIndex(of: "--eval"), e + 1 < args.count,
-                       let c = services.frontController, let id = c.store.selectedTab?.id, let web = c.runtime.tab(id)?.webView {
-                        let r = try? await web.evaluateJavaScript(args[e + 1])
-                        print("EVAL \(r.map { "\($0)" } ?? "nil")")
-                    }
                     await capture(services: services, to: out)
                     NSApp.terminate(nil)
                 }
@@ -64,6 +66,7 @@ enum DebugSnapshot {
     static func capture(services: AppServices, to url: URL) async {
         guard let window = services.frontController?.window, let content = window.contentView else { return }
         let bounds = content.bounds
+        print("OVERLAYS at \(Date().timeIntervalSince1970) \(content.subviews.map { "\(type(of: $0)) \($0.frame.integral)" })"); fflush(stdout)
         guard let rep = content.bitmapImageRepForCachingDisplay(in: bounds) else { return }
         content.cacheDisplay(in: bounds, to: rep)
         let image = NSImage(size: bounds.size)

@@ -187,6 +187,7 @@ extension AppServices: WebTabDelegate {
     }
 
     func webTab(_ tab: WebTab, autofillMessage body: [String: Any]) {
+        if CommandLine.arguments.contains("--snapshot") { print("AUTOFILL \(body["type"] ?? "?") host=\(body["host"] ?? "?") tab=\(tab.url?.host() ?? "nil") at \(Date().timeIntervalSince1970)"); fflush(stdout) }
         guard let type = body["type"] as? String, let host = body["host"] as? String else { return }
         // Only trust messages whose host matches the tab's top-level page.
         guard host == tab.url?.host() else { return }
@@ -207,7 +208,9 @@ extension AppServices: WebTabDelegate {
         case "submitted":
             guard !isPrivate(tab.id), let username = body["username"] as? String, let password = body["password"] as? String else { return }
             Task {
+                let t0 = Date()
                 let decision = await credentials.didSubmit(host: host, username: username, password: password)
+                if CommandLine.arguments.contains("--snapshot") { print("AUTOFILL decision \(decision) in \(Date().timeIntervalSince(t0))s"); fflush(stdout) }
                 CredentialBanner.offerSave(decision, in: frontController?.window, credentials: credentials, password: password)
             }
         default: break

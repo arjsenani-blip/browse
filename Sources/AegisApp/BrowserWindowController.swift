@@ -65,7 +65,21 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         split.addSplitViewItem(sideItem)
         split.addSplitViewItem(contentItem)
         split.splitView.autosaveName = "AegisSplit"
-        window.contentViewController = split
+        // A plain root view holds the split view, so overlays (palette,
+        // banners, toasts) added to contentView sit above it instead of
+        // becoming split panes.
+        let root = NSViewController()
+        root.view = NSView()
+        root.addChild(split)
+        split.view.translatesAutoresizingMaskIntoConstraints = false
+        root.view.addSubview(split.view)
+        NSLayoutConstraint.activate([
+            split.view.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
+            split.view.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
+            split.view.topAnchor.constraint(equalTo: root.view.topAnchor),
+            split.view.bottomAnchor.constraint(equalTo: root.view.bottomAnchor),
+        ])
+        window.contentViewController = root
         // The split view sizes the window to its fitting size; restore ours.
         if !window.setFrameUsingName("AegisMainWindow") || window.frame.width < 900 {
             let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero

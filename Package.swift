@@ -31,5 +31,6 @@ let package = Package(
         .testTarget(name: "SearchTests", dependencies: ["Search", "Persistence"]),
         .testTarget(name: "PersistenceTests", dependencies: ["Persistence"]),
         .testTarget(name: "ContentBlockingTests", dependencies: ["ContentBlocking"]),
+        .testTarget(name: "WebEngineTests", dependencies: ["WebEngine"]),
     ]
 )

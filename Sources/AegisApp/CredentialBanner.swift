@@ -69,7 +69,7 @@ enum CredentialBanner {
             stack.bottomAnchor.constraint(equalTo: banner.bottomAnchor),
             banner.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
             banner.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
-            banner.widthAnchor.constraint(lessThanOrEqualToConstant: 520),
+            banner.widthAnchor.constraint(lessThanOrEqualToConstant: 680),
         ])
         current = banner
         NSAccessibility.post(element: banner, notification: .announcementRequested, userInfo: [.announcement: text])
