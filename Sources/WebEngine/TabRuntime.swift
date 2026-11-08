@@ -101,7 +101,7 @@ public final class TabRuntime {
         source.activate()
         pressureSource = source
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { Task { await self?.runHibernation() } }
+            MainActor.assumeIsolated { _ = Task { await self?.runHibernation() } }
         }
     }
 

@@ -192,7 +192,8 @@ extension AppServices: WebTabDelegate {
         guard host == tab.url?.host() else { return }
         switch type {
         case "formsFound":
-            Task {
+            Task { [weak self] in
+                guard let self else { return }
                 let suggestions = await credentials.didFindForms(host: host)
                 guard let first = suggestions.first else { return }
                 CredentialBanner.offerFill(suggestion: first, count: suggestions.count, in: frontController?.window) { [weak self] in

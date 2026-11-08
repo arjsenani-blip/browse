@@ -14,7 +14,7 @@ enum DebugSnapshot {
         if args.contains("--dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
         let delay = args.firstIndex(of: "--delay").flatMap { Double(args[$0 + 1]) } ?? 6
         if let j = args.firstIndex(of: "--open"), j + 1 < args.count {
-            for raw in args[(j + 1)...].prefix { !$0.hasPrefix("--") } {
+            for raw in args[(j + 1)...].prefix(while: { !$0.hasPrefix("--") }) {
                 if let url = URL(string: raw) { services.frontController?.navigate(to: url, newTab: true, typed: false) }
             }
         }
@@ -25,6 +25,15 @@ enum DebugSnapshot {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     services.frontController?.debugSetPaletteQuery(q)
                 }
+            }
+            if args.contains("--organize"), let c = services.frontController {
+                let all = services.store.currentSpace.today
+                if all.count >= 4 {
+                    services.store.move(all[all.count - 1], to: .favorite)
+                    services.store.move(all[all.count - 2], to: .favorite)
+                    services.store.move(all[all.count - 3], to: .pinned)
+                }
+                c.refresh()
             }
             if args.contains("--reader") { services.frontController?.toggleReader() }
             if args.contains("--memory") {

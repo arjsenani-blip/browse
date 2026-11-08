@@ -58,13 +58,11 @@ public final class Favicons {
         }
     }
 
-    /// A neutral placeholder: a soft rounded square, no letter or invented mark.
+    /// A neutral placeholder for sites without an icon: the system globe,
+    /// tinted secondary so it reads in light and dark.
     public static func placeholder(hue: Double? = nil) -> NSImage {
-        NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
-            let color = hue.map { Tokens.accent(hue: $0).withAlphaComponent(0.35) } ?? NSColor.tertiaryLabelColor.withAlphaComponent(0.35)
-            color.setFill()
-            NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 4, yRadius: 4).fill()
-            return true
-        }
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+            .applying(.init(paletteColors: [NSColor.secondaryLabelColor]))
+        return NSImage(systemSymbolName: "globe", accessibilityDescription: nil)?.withSymbolConfiguration(config) ?? NSImage()
     }
 }
