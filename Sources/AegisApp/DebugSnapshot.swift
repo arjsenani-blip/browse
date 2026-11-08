@@ -11,6 +11,7 @@ enum DebugSnapshot {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count else { return }
         let out = URL(fileURLWithPath: args[i + 1])
+        if args.contains("--dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
         let delay = args.firstIndex(of: "--delay").flatMap { Double(args[$0 + 1]) } ?? 6
         if let j = args.firstIndex(of: "--open"), j + 1 < args.count {
             for raw in args[(j + 1)...].prefix { !$0.hasPrefix("--") } {
@@ -39,6 +40,11 @@ enum DebugSnapshot {
             DispatchQueue.main.asyncAfter(deadline: .now() + (args.contains("--memory") ? 12 : 1.5)) {
                 Task {
                     if args.contains("--resources") { await printResources(services: services) }
+                    if let e = args.firstIndex(of: "--eval"), e + 1 < args.count,
+                       let c = services.frontController, let id = c.store.selectedTab?.id, let web = c.runtime.tab(id)?.webView {
+                        let r = try? await web.evaluateJavaScript(args[e + 1])
+                        print("EVAL \(r.map { "\($0)" } ?? "nil")")
+                    }
                     await capture(services: services, to: out)
                     NSApp.terminate(nil)
                 }

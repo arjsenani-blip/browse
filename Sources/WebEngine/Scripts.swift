@@ -38,33 +38,43 @@ enum Farbling {
           define(Navigator.prototype, 'hardwareConcurrency', 8);
           if ('deviceMemory' in Navigator.prototype) define(Navigator.prototype, 'deviceMemory', 8);
 
-          // Canvas: flip the low bit of a sparse, seeded set of pixels on read-out.
-          const noisify = (ctx, w, h) => {
-            if (!ctx || w * h === 0 || w * h > 4096 * 4096) return;
-            const img = origGetImageData.call(ctx, 0, 0, w, h);
-            const d = img.data;
-            const n = Math.max(1, Math.floor(d.length / 4 / 2000));
-            s = seed >>> 0;
-            for (let i = 0; i < n; i++) { const p = Math.floor(rand() * (d.length / 4)) * 4; d[p] ^= 1; }
-            ctx.putImageData(img, 0, 0);
-          };
+          // Canvas: flip the low bit of a sparse, seeded set of pixels in the
+          // read-out only. The page's canvas is never modified, so repeated
+          // reads on one site return the same value.
           const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
           const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
           const origToBlob = HTMLCanvasElement.prototype.toBlob;
+          const farble = (data) => {
+            s = seed >>> 0;
+            const n = Math.max(1, Math.floor(data.length / 4 / 2000));
+            for (let i = 0; i < n; i++) { const p = Math.floor(rand() * (data.length / 4)) * 4; data[p] ^= 1; }
+          };
+          const noisyCopy = (canvas) => {
+            const w = canvas.width, h = canvas.height;
+            if (w * h === 0 || w * h > 4096 * 4096) return null;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return null;
+            const img = origGetImageData.call(ctx, 0, 0, w, h);
+            farble(img.data);
+            const copy = document.createElement('canvas');
+            copy.width = w; copy.height = h;
+            copy.getContext('2d').putImageData(img, 0, 0);
+            return copy;
+          };
           CanvasRenderingContext2D.prototype.getImageData = function (x, y, w, h) {
             const img = origGetImageData.call(this, x, y, w, h);
-            s = seed >>> 0;
-            const d = img.data, n = Math.max(1, Math.floor(d.length / 4 / 2000));
-            for (let i = 0; i < n; i++) { const p = Math.floor(rand() * (d.length / 4)) * 4; d[p] ^= 1; }
+            farble(img.data);
             return img;
           };
           HTMLCanvasElement.prototype.toDataURL = function (...a) {
-            try { noisify(this.getContext('2d'), this.width, this.height); } catch (_) {}
-            return origToDataURL.apply(this, a);
+            let copy = null;
+            try { copy = noisyCopy(this); } catch (_) {}
+            return origToDataURL.apply(copy || this, a);
           };
           HTMLCanvasElement.prototype.toBlob = function (...a) {
-            try { noisify(this.getContext('2d'), this.width, this.height); } catch (_) {}
-            return origToBlob.apply(this, a);
+            let copy = null;
+            try { copy = noisyCopy(this); } catch (_) {}
+            return origToBlob.apply(copy || this, a);
           };
 
           // WebGL: report a generic renderer.
