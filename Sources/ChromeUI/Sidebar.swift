@@ -80,6 +80,8 @@ public final class SidebarViewController: NSViewController {
     private let reloadButton = SidebarViewController.iconButton("arrow.clockwise", "Reload")
     private let urlPill = URLPill()
     private let favoritesGrid = NSStackView()
+    private let extensionRow = NSStackView()
+    private var favoritesTop: NSLayoutConstraint?
     private let table = SidebarTableView()
     private let spaceDots = NSStackView()
     private let spaceLabel = NSTextField(labelWithString: "")
@@ -208,7 +210,10 @@ public final class SidebarViewController: NSViewController {
         nowPlayingView.onOpen = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarSelect(id) } }
         nowPlayingView.isHidden = true
 
-        for v in [nav, urlPill, favoritesGrid, scroll, nowPlayingView, footer] as [NSView] {
+        extensionRow.orientation = .horizontal
+        extensionRow.spacing = 6
+        extensionRow.isHidden = true
+        for v in [nav, urlPill, extensionRow, favoritesGrid, scroll, nowPlayingView, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -220,7 +225,10 @@ public final class SidebarViewController: NSViewController {
             urlPill.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: pad),
             urlPill.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -pad),
             urlPill.heightAnchor.constraint(equalToConstant: Tokens.Size.urlPill),
-            favoritesGrid.topAnchor.constraint(equalTo: urlPill.bottomAnchor, constant: Tokens.Space.sectionGap),
+            extensionRow.topAnchor.constraint(equalTo: urlPill.bottomAnchor, constant: 8),
+            extensionRow.leadingAnchor.constraint(equalTo: urlPill.leadingAnchor, constant: 6),
+            extensionRow.heightAnchor.constraint(equalToConstant: 22),
+            favoritesGrid.topAnchor.constraint(equalTo: extensionRow.bottomAnchor, constant: Tokens.Space.sectionGap - 8),
             favoritesGrid.leadingAnchor.constraint(equalTo: urlPill.leadingAnchor),
             favoritesGrid.trailingAnchor.constraint(equalTo: urlPill.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: favoritesGrid.bottomAnchor, constant: Tokens.Space.sectionGap),
@@ -312,6 +320,17 @@ public final class SidebarViewController: NSViewController {
     @objc private func reload() { delegate?.sidebarReload() }
     @objc private func newTabClicked() { delegate?.sidebarNewTab() }
     @objc private func libraryClicked() { delegate?.sidebarOpenLibrary(from: libraryButton) }
+
+    /// Extension toolbar buttons, shown under the address pill.
+    public func setExtensionButtons(_ buttons: [NSView]) {
+        // Same buttons in the same order: leave them in place (moving an
+        // anchor view closes any popover shown from it).
+        if extensionRow.arrangedSubviews.count == buttons.count,
+           zip(extensionRow.arrangedSubviews, buttons).allSatisfy({ $0 === $1 }) { return }
+        extensionRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        buttons.forEach(extensionRow.addArrangedSubview)
+        extensionRow.isHidden = buttons.isEmpty
+    }
 
     // MARK: Swipe between spaces
 

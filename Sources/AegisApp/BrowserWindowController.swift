@@ -23,6 +23,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var refreshScheduled = false
     private var findBar: FindBar?
     private let topBar = TopTabBar()
+    private var extensionButtons: [String: NSButton] = [:]
+    lazy var extensionWindow: ExtensionWindowAdapter = app.extensions.windowAdapter(for: self) { [unowned self] in
+        ExtensionWindowAdapter(window: window!,
+            tabs: { [unowned self] in store.currentSpace.allTabs.compactMap { runtime.tab($0) }.map { app.extensionTab($0) } },
+            activeTab: { [unowned self] in store.currentSpace.selected.flatMap { runtime.tab($0) }.map { app.extensionTab($0) } },
+            isPrivate: app.privateProfiles.contains(store.currentSpace.profileID))
+    }
     private var sideItem: NSSplitViewItem!
     private var cardTopToContainer: NSLayoutConstraint!
     private var cardTopToBar: NSLayoutConstraint!
@@ -111,7 +118,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
 
         observeStore()
+        app.extensions.didOpen(window: extensionWindow)
         applyTabLayout(animated: false)
+        refreshExtensionButtons()
         refresh()
     }
 
@@ -264,7 +273,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func select(_ id: TabID) {
         exitReader()
+        let previous = store.currentSpace.selected.flatMap { runtime.tab($0) }
         store.select(id)
+        if let tab = runtime.tab(id) {
+            app.extensions.didActivate(tab: app.extensionTab(tab), previous: previous.map(app.extensionTab))
+        }
+        refreshExtensionButtons()
     }
 
     func closeCurrentTab() {
@@ -275,6 +289,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func closeTab(_ id: TabID) {
         if let w = runtime.tab(id), let state = w.interactionState { store.update(id) { $0.interactionState = state } }
+        if let w = runtime.tab(id) { app.extensions.webTabDidClose(w) }
         runtime.discard(id)
         if readerFor == id { readerFor = nil }
         store.close(id)
@@ -397,10 +412,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     // MARK: Window
 
     func windowWillClose(_ notification: Notification) {
+        app.extensions.didClose(window: extensionWindow, owner: self)
         app.windowClosed(self)
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        app.extensions.didFocus(window: extensionWindow)
         if let id = store.currentSpace.selected { runtime.foreground = [id] }
     }
 }
@@ -589,5 +606,38 @@ extension BrowserWindowController: LibraryActions {
     func libraryClearFinished() {
         DownloadCenter.shared.clearFinished()
         refreshLibrary()
+    }
+}
+
+// MARK: - Extension toolbar buttons
+
+extension BrowserWindowController {
+    func extensionButton(for id: String) -> NSButton? { extensionButtons[id] }
+
+    func refreshExtensionButtons() {
+        let current = store.currentSpace.selected.flatMap { runtime.tab($0) }.map(app.extensionTab)
+        var buttons: [NSButton] = []
+        var map: [String: NSButton] = [:]
+        for record in app.extensions.extensions where record.enabled && app.extensions.context(for: record.id)?.isLoaded == true {
+            let action = app.extensions.action(for: record.id, tab: current)
+            let button = extensionButtons[record.id] ?? ActionButton(title: "") { [weak self] in
+                guard let self else { return }
+                let tab = self.store.currentSpace.selected.flatMap { self.runtime.tab($0) }.map(self.app.extensionTab)
+                self.app.extensions.performAction(for: record.id, tab: tab)
+            }
+            button.isBordered = false
+            button.imagePosition = .imageOnly
+            button.image = action?.icon(for: CGSize(width: 16, height: 16)) ?? NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: nil)
+            let badge = action?.badgeText ?? ""
+            button.toolTip = (action?.label ?? record.name) + (badge.isEmpty ? "" : " (\(badge))")
+            button.setAccessibilityLabel(record.name)
+            if !button.constraints.contains(where: { $0.firstAttribute == .width }) {
+                button.widthAnchor.constraint(equalToConstant: 24).isActive = true
+            }
+            map[record.id] = button
+            buttons.append(button)
+        }
+        extensionButtons = map
+        sidebar.setExtensionButtons(buttons)
     }
 }

@@ -368,6 +368,36 @@ enum Fixture {
         #expect(!FileManager.default.fileExists(atPath: host.installer.directory(for: installed.id).path))
     }
 
+    /// Content scripts inject into normal web views but not private ones
+    /// (non-persistent data store) unless the user allowed private access.
+    @Test func injectsContentScriptsOnlyIntoNonPrivateViews() async throws {
+        let root = try Fixture.tempDir(), src = try Fixture.tempDir()
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: src) }
+        try Fixture.write(Fixture.mv3, to: src)
+        let host = ExtensionHost(root: root, persistent: false)
+        let installed = try await host.installUnpacked(from: src)
+        try host.grant(ExtensionPermissionGrant(try #require(host.pendingPermissions(for: installed.id))))
+
+        func probe(_ store: WKWebsiteDataStore) async throws -> String? {
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = store
+            host.configure(config)
+            let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 400, height: 300), configuration: config)
+            view.loadHTMLString("<html><body>hi</body></html>", baseURL: URL(string: "https://example.org/")!)
+            try await Task.sleep(for: .milliseconds(200))
+            for _ in 0..<40 where view.isLoading { try await Task.sleep(for: .milliseconds(100)) }
+            try await Task.sleep(for: .milliseconds(500))
+            return try await view.evaluateJavaScript("document.documentElement.dataset.aegisTest || 'none'") as? String
+        }
+        let storeID = UUID()
+        let normal = try await probe(WKWebsiteDataStore(forIdentifier: storeID))
+        let privateView = try await probe(.nonPersistent())
+        try? await WKWebsiteDataStore.remove(forIdentifier: storeID)
+        print("[ext] content script: normal view ->", normal ?? "nil", "| private view ->", privateView ?? "nil")
+        #expect(normal == "1")
+        #expect(privateView == "none")
+    }
+
     @Test func installsSyntheticCRX3EndToEnd() async throws {
         let root = try Fixture.tempDir()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -448,6 +478,57 @@ enum Fixture {
 
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["AEGIS_NETWORK_TESTS"] != nil))
 @MainActor struct RealExtensionTests {
+    /// Minimal static DNR ruleset: does WebKit enforce it in a configured web view?
+    @Test func staticDNRRuleBlocks() async throws {
+        let root = try Fixture.tempDir(), src = try Fixture.tempDir()
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: src) }
+        try Fixture.write([
+            "manifest.json": #"{"manifest_version":3,"name":"DNR","version":"1","permissions":["declarativeNetRequest"],"host_permissions":["<all_urls>"],"declarative_net_request":{"rule_resources":[{"id":"r","enabled":true,"path":"rules.json"}]}}"#,
+            "rules.json": #"[{"id":1,"priority":1,"action":{"type":"block"},"condition":{"urlFilter":"||iana.org^","resourceTypes":["xmlhttprequest","image","script","other"]}}]"#,
+        ], to: src)
+        let host = ExtensionHost(root: root, persistent: false)
+        let installed = try await host.installUnpacked(from: src)
+        try host.grant(ExtensionPermissionGrant(try #require(host.pendingPermissions(for: installed.id))))
+        print("[dnr] errors:", host.errors(for: installed.id), "hasRules:", host.context(for: installed.id)?.hasContentModificationRules ?? false)
+        let config = WKWebViewConfiguration()
+        // A non-persistent store marks the view private: extensions without private access skip it.
+        let storeID = UUID()
+        config.websiteDataStore = WKWebsiteDataStore(forIdentifier: storeID)
+        defer { Task { try? await WKWebsiteDataStore.remove(forIdentifier: storeID) } }
+        host.configure(config)
+        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), configuration: config)
+        print("[dnr] config controller attached:", view.configuration.webExtensionController === host.controller)
+        var window: ExtensionWindowAdapter!
+        let tab = ExtensionTabAdapter(webView: { view }, isSelected: { true }, window: { window }, activate: {}, close: {})
+        window = ExtensionWindowAdapter(tabs: { [tab] }, activeTab: { tab }, frame: { .zero }, focus: {})
+        host.openWindows = { [window] }
+        host.didOpen(window: window)
+        host.didOpen(tab: tab)
+        host.didActivate(tab: tab)
+        try await Task.sleep(for: .seconds(2))
+        view.load(URLRequest(url: URL(string: "https://example.com/")!))
+        for _ in 0..<40 where view.isLoading || view.url == nil { try await Task.sleep(for: .milliseconds(250)) }
+        let js = "try { await fetch('https://www.iana.org/favicon.ico', {mode: 'no-cors'}); return 'loaded'; } catch (e) { return 'blocked: ' + e; }"
+        let r = try await view.callAsyncJavaScript(js, contentWorld: .page) as? String
+        print("[dnr] fetch iana.org from example.com ->", r ?? "nil")
+        #expect(r?.hasPrefix("blocked") == true)
+        // Content script injection in the same setup.
+        let src2 = try Fixture.tempDir()
+        defer { try? FileManager.default.removeItem(at: src2) }
+        try Fixture.write(Fixture.mv3, to: src2)
+        let cs = try await host.installUnpacked(from: src2)
+        try host.grant(ExtensionPermissionGrant(try #require(host.pendingPermissions(for: cs.id))))
+        view.load(URLRequest(url: URL(string: "https://example.org/")!))
+        try await Task.sleep(for: .milliseconds(300))
+        for _ in 0..<40 where view.isLoading { try await Task.sleep(for: .milliseconds(250)) }
+        try await Task.sleep(for: .seconds(1))
+        let injected = try await view.evaluateJavaScript("document.documentElement.dataset.aegisTest || 'none'") as? String
+        print("[dnr] content script on example.org ->", injected ?? "nil", "url:", view.url?.absoluteString ?? "")
+        #expect(injected == "1")
+        let r2 = try await view.callAsyncJavaScript(js, contentWorld: .page) as? String
+        print("[dnr] fetch iana.org from example.org ->", r2 ?? "nil")
+    }
+
     @Test(arguments: [
         ("uBlock Origin Lite", "ddkjiahejlhfcafbddmgiahcphecmpfh"),
         ("Dark Reader", "eimadpbcbfnmbkopoojfekhnkhdbieeh"),
@@ -475,7 +556,9 @@ enum Fixture {
         if id == "ddkjiahejlhfcafbddmgiahcphecmpfh" {
             // Does the DNR ruleset actually block in a web view wired to the controller?
             let config = WKWebViewConfiguration()
-            config.websiteDataStore = .nonPersistent()
+            let storeID = UUID()
+            config.websiteDataStore = WKWebsiteDataStore(forIdentifier: storeID)
+            defer { Task { try? await WKWebsiteDataStore.remove(forIdentifier: storeID) } }
             host.configure(config)
             let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), configuration: config)
             let tab = ExtensionTabAdapter(webView: { view }, isSelected: { true }, window: { nil }, activate: {}, close: {})
@@ -487,6 +570,18 @@ enum Fixture {
             let ad = try await view.callAsyncJavaScript(js, contentWorld: .page) as? String
             let ok = try await view.callAsyncJavaScript(js.replacingOccurrences(of: "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js", with: "https://www.iana.org/favicon.ico"), contentWorld: .page) as? String
             print("[real] uBOL DNR: ad request ->", ad ?? "nil", "| control request ->", ok ?? "nil")
+            #expect(ad?.hasPrefix("blocked") == true)
+            #expect(ok == "loaded")
+            let dnr = (ext.manifest["declarative_net_request"] as? [String: Any])?["rule_resources"] as? [[String: Any]] ?? []
+            print("[real] uBOL rulesets enabled in manifest:", dnr.filter { $0["enabled"] as? Bool == true }.compactMap { $0["id"] as? String },
+                  "ctx.hasContentModificationRules:", ctx.hasContentModificationRules)
+            try await Task.sleep(for: .seconds(10))
+            view.reload()
+            for _ in 0..<40 where view.isLoading { try await Task.sleep(for: .milliseconds(250)) }
+            let later = try await view.callAsyncJavaScript(js, contentWorld: .page) as? String
+            let img = "return await new Promise(r => { const i = new Image(); i.onload = () => r('loaded'); i.onerror = () => r('blocked/error'); i.src = 'https://googleads.g.doubleclick.net/pagead/viewthroughconversion/1/?x=' + Math.random(); });"
+            let imgResult = try await view.callAsyncJavaScript(img, contentWorld: .page) as? String
+            print("[real] uBOL DNR after 10s + reload: fetch ->", later ?? "nil", "| doubleclick img ->", imgResult ?? "nil", "| errors:", host.errors(for: id))
         }
         print("[real] \(name) hasBackground:", ext.hasBackgroundContent, "hasInjected:", ext.hasInjectedContent,
               "DNR rules:", ext.hasContentModificationRules, "options:", ext.hasOptionsPage)

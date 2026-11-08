@@ -18,6 +18,17 @@ enum DebugSnapshot {
                 if let url = URL(string: raw) { services.frontController?.navigate(to: url, newTab: true, typed: false) }
             }
         }
+        if let k = args.firstIndex(of: "--install-extension"), k + 1 < args.count, let url = URL(string: args[k + 1]) {
+            services.installExtension(from: url)
+        }
+        if args.contains("--list-extensions") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay - 0.5) {
+                for r in services.extensions.extensions {
+                    print("EXT \(r.name) \(r.version) enabled=\(r.enabled) loaded=\(services.extensions.context(for: r.id)?.isLoaded ?? false) errors=\(services.extensions.errors(for: r.id))")
+                }
+                fflush(stdout)
+            }
+        }
         if let k = args.firstIndex(of: "--space2-open"), k + 1 < args.count, let url = URL(string: args[k + 1]) {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay / 2) {
                 services.frontController?.newSpace()
@@ -45,6 +56,12 @@ enum DebugSnapshot {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     if let first = services.store.currentSpace.today.last { services.frontController?.select(first) }
                 }
+            }
+            if args.contains("--click-extension"), let c = services.frontController, let first = services.extensions.extensions.first {
+                NSApp.activate(ignoringOtherApps: true)
+                c.window?.makeKeyAndOrderFront(nil)
+                let tab = c.store.currentSpace.selected.flatMap { c.runtime.tab($0) }.map { services.extensionTab($0) }
+                services.extensions.performAction(for: first.id, tab: tab)
             }
             if args.contains("--playall") {
                 for space in services.store.spaces { for id in space.allTabs { services.runtime.tab(id)?.togglePlayback() } }
@@ -102,9 +119,14 @@ enum DebugSnapshot {
         }
         image.draw(in: bounds)
         composed.unlockFocus()
+        print("WINDOWS \(NSApp.windows.map { "\($0.className) visible=\($0.isVisible) \($0.frame.integral)" })"); fflush(stdout)
         // Popovers live in their own windows; save each beside the main image.
         for (n, w) in NSApp.windows.enumerated() where w.isVisible && w !== window && w.className.contains("Popover") {
-            if let v = w.contentView, let r = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+            if let v = w.contentView, let web = allWebViews(in: v).first,
+               let img = try? await web.takeSnapshot(configuration: WKSnapshotConfiguration()),
+               let tiff = img.tiffRepresentation, let bmp = NSBitmapImageRep(data: tiff) {
+                try? bmp.representation(using: .png, properties: [:])?.write(to: url.deletingPathExtension().appendingPathExtension("popover\(n).png"))
+            } else if let v = w.contentView, let r = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
                 v.cacheDisplay(in: v.bounds, to: r)
                 try? r.representation(using: .png, properties: [:])?.write(to: url.deletingPathExtension().appendingPathExtension("popover\(n).png"))
             }

@@ -16,6 +16,7 @@ let package = Package(
         .target(
             name: "WebEngine",
             dependencies: ["BrowserCore", "ContentBlocking"],
+            exclude: ["Extensions/INTEGRATION.md"],
             resources: [.copy("Resources/js")]
         ),
         .target(

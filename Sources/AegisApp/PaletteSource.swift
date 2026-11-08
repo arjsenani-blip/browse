@@ -42,6 +42,7 @@ final class PaletteSource: PaletteDataSource {
         PaletteCommand(id: "clearHistory", title: "Clear History", aliases: ["forget"], icon: "clock.arrow.circlepath"),
         PaletteCommand(id: "importPasswords", title: "Import Passwords", aliases: ["csv", "keychain", "passwords app"], icon: "key"),
         PaletteCommand(id: "updateFilters", title: "Update Filter Lists", aliases: ["easylist"], icon: "arrow.down.circle"),
+        PaletteCommand(id: "addExtension", title: "Add Extension from Chrome Web Store…", aliases: ["extension", "chrome web store", "addon", "plugin"], icon: "puzzlepiece.extension"),
         PaletteCommand(id: "settings", title: "Settings", aliases: ["preferences"], shortcut: "⌘,", icon: "gear"),
         PaletteCommand(id: "defaultBrowser", title: "Make Default Browser", icon: "checkmark.seal"),
     ]
@@ -171,6 +172,7 @@ final class PaletteSource: PaletteDataSource {
             case "importPasswords": d?.importPasswords()
             case "updateFilters": d?.updateFilters()
             case "settings": d?.showSettings()
+            case "addExtension": d?.addExtension()
             case "defaultBrowser": d?.makeDefaultBrowser()
             default: break
             }

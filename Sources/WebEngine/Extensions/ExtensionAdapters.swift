@@ -28,7 +28,7 @@ public final class ExtensionTabAdapter: NSObject, WKWebExtensionTab {
     public var load: ((URL) -> Void)?
     public var isLoadingComplete: (() -> Bool)?
     public var indexInWindow: (() -> Int?)?
-    public var parent: (() -> (any WKWebExtensionTab)?)?
+    public var parent: (@MainActor () -> (any WKWebExtensionTab)?)?
     public var isPinned: () -> Bool = { false }
     public var setPinned: ((Bool) -> Void)?
     public var isMuted: () -> Bool = { false }
@@ -38,7 +38,7 @@ public final class ExtensionTabAdapter: NSObject, WKWebExtensionTab {
     public var isReaderModeAvailable: () -> Bool = { false }
     public var isReaderModeActive: () -> Bool = { false }
     public var setReaderModeActive: ((Bool) -> Void)?
-    public var duplicate: (() -> (any WKWebExtensionTab)?)?
+    public var duplicate: (@MainActor () -> (any WKWebExtensionTab)?)?
 
     public init(
         webView: @escaping () -> WKWebView?,
@@ -151,8 +151,8 @@ public final class ExtensionTabAdapter: NSObject, WKWebExtensionTab {
 /// A `WKWebExtensionWindow` made of closures. One adapter per window, kept for its life.
 @MainActor
 public final class ExtensionWindowAdapter: NSObject, WKWebExtensionWindow {
-    public var tabs: () -> [any WKWebExtensionTab]
-    public var activeTab: () -> (any WKWebExtensionTab)?
+    public var tabs: @MainActor () -> [any WKWebExtensionTab]
+    public var activeTab: @MainActor () -> (any WKWebExtensionTab)?
     public var frame: () -> CGRect
     public var focus: () -> Void
     /// Read once by WebKit and cached for the window's life.
@@ -165,8 +165,8 @@ public final class ExtensionWindowAdapter: NSObject, WKWebExtensionWindow {
     public var close: (() -> Void)?
 
     public init(
-        tabs: @escaping () -> [any WKWebExtensionTab],
-        activeTab: @escaping () -> (any WKWebExtensionTab)?,
+        tabs: @escaping @MainActor () -> [any WKWebExtensionTab],
+        activeTab: @escaping @MainActor () -> (any WKWebExtensionTab)?,
         frame: @escaping () -> CGRect,
         focus: @escaping () -> Void,
         isPrivate: @escaping () -> Bool = { false }
@@ -179,8 +179,8 @@ public final class ExtensionWindowAdapter: NSObject, WKWebExtensionWindow {
     }
 
     /// Convenience for an NSWindow-backed browser window.
-    public convenience init(window: NSWindow, tabs: @escaping () -> [any WKWebExtensionTab],
-                            activeTab: @escaping () -> (any WKWebExtensionTab)?, isPrivate: Bool = false) {
+    public convenience init(window: NSWindow, tabs: @escaping @MainActor () -> [any WKWebExtensionTab],
+                            activeTab: @escaping @MainActor () -> (any WKWebExtensionTab)?, isPrivate: Bool = false) {
         self.init(tabs: tabs, activeTab: activeTab,
                   frame: { [weak window] in window?.frame ?? .null },
                   focus: { [weak window] in window?.makeKeyAndOrderFront(nil); NSApp.activate() },

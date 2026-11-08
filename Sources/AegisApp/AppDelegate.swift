@@ -176,6 +176,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func showSettings() { services.showSettings() }
 
+    @objc func addExtension() {
+        let alert = NSAlert()
+        alert.messageText = "Add an extension"
+        alert.informativeText = "Paste a Chrome Web Store link, or open the store and Aegis will offer to add the extension you're viewing."
+        let field = NSTextField(string: "")
+        field.placeholderString = "https://chromewebstore.google.com/detail/…"
+        field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Open Chrome Web Store")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            if let url = URL(string: field.stringValue.trimmingCharacters(in: .whitespaces)) { services.installExtension(from: url) }
+        case .alertSecondButtonReturn:
+            front?.navigate(to: URL(string: "https://chromewebstore.google.com")!, newTab: true)
+        default: break
+        }
+    }
+
     @objc func makeDefaultBrowser() {
         let url = Bundle.main.bundleURL
         Task {

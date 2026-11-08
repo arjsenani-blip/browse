@@ -11,6 +11,7 @@ enum Menus {
             item("About Aegis", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", target: nil),
             .separator(),
             item("Settings…", #selector(AppDelegate.showSettings), ",", target: target),
+            item("Add Extension…", #selector(AppDelegate.addExtension), "", target: target),
             item("Make Aegis the Default Browser", #selector(AppDelegate.makeDefaultBrowser), "", target: target),
             .separator(),
             item("Hide Aegis", #selector(NSApplication.hide(_:)), "h", target: nil),

@@ -23,6 +23,9 @@ public final class TabRuntime {
     public var ephemeralProfiles: Set<UUID> = []
     /// The encrypted-DNS proxy every profile routes through (nil = direct).
     public var proxyConfiguration: ProxyConfiguration?
+    public weak var extensionHost: ExtensionHost?
+    /// Called once when a WebTab object is created (for extension bookkeeping).
+    public var onTabCreated: ((WebTab) -> Void)?
 
     private var pressureSource: DispatchSourceMemoryPressure?
     private var timer: Timer?
@@ -35,6 +38,7 @@ public final class TabRuntime {
     public func context(for profile: Profile) -> ProfileContext {
         if let c = contexts[profile.id] { return c }
         let c = ProfileContext(profile: profile, ephemeral: ephemeralProfiles.contains(profile.id), policy: policy, settings: settings, proxy: proxyConfiguration)
+        c.extensionHost = extensionHost
         contexts[profile.id] = c
         return c
     }
@@ -48,6 +52,7 @@ public final class TabRuntime {
         let t = WebTab(id: id, context: context(for: store.profile(for: space)))
         t.delegate = delegate
         tabs[id] = t
+        onTabCreated?(t)
         return t
     }
 

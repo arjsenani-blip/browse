@@ -33,6 +33,8 @@ public final class ProfileContext {
     weak var policy: ContentPolicy?
     var settings: PrivacySettings
     private var live: [ObjectIdentifier: WeakTab] = [:]
+    /// Attaches the extension controller to every web view in this profile.
+    weak var extensionHost: ExtensionHost?
 
     public init(profile: Profile, ephemeral: Bool = false, policy: ContentPolicy?, settings: PrivacySettings, proxy: ProxyConfiguration? = nil) {
         self.profile = profile
@@ -67,6 +69,7 @@ public final class ProfileContext {
         config.defaultWebpagePreferences.preferredHTTPSNavigationPolicy = settings.httpsOnly ? .userMediatedFallbackToHTTP : .keepAsRequested
         config.upgradeKnownHostsToHTTPS = true
         config.applicationNameForUserAgent = "Version/26.0 Safari/605.1.15"
+        extensionHost?.configure(config)
         return config
     }
 

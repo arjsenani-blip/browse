@@ -53,7 +53,7 @@ Measured with the same 5 sites open (`docs/benchmarks.md`):
 | Passkeys from iCloud Keychain | ⏳ Code ready; needs Apple's entitlement | See below |
 | DNS-over-HTTPS (Quad9 by default; Cloudflare, Mullvad) | ✅ | Connection reports show `dnsProtocol=https`; pages load through the proxy |
 | Import from Arc (spaces, favorites, pinned), Chromium browsers, Safari | ✅ Tested on sample files | Arc isn't installed here, so it hasn't been tried on real Arc data |
-| Chrome Web Store extensions | 🔧 In progress | |
+| Chrome Web Store extensions ("Add to Aegis" on store pages, ⌘K → Add Extension) | ✅ MV3 via WebKit | uBlock Origin Lite installed from the store, loaded with no errors, popup works; Dark Reader loads; Bitwarden's background script fails |
 
 ## Apple Passwords: what's possible
 
@@ -66,6 +66,8 @@ Measured with the same 5 sites open (`docs/benchmarks.md`):
 See `CLAUDE.md` for the module map and rules. Every decision is backed by a research note in `docs/research/`.
 
 ## Known limits
+
+- Extensions: WebKit's runtime supports MV3 and declarativeNetRequest, but not blocking `webRequest`, `offscreen`, `sidePanel`, `identity` or native messaging, so some extensions (e.g. Bitwarden) don't work yet. Extensions don't auto-update yet.
 
 - WebKit can't intercept http/https requests, so blocking is declarative. 696 of 134k filters, such as procedural cosmetics and scriptlets, can't be expressed.
 - Fingerprint defenses run in the page world and can be detected by scripts like CreepJS.

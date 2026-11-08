@@ -19,6 +19,7 @@ final class AppServices {
     let passwords = PasswordStore()
     lazy var credentials = CredentialsCoordinator(store: passwords)
     let blocking = BlockingAdapter()
+    let extensions = ExtensionHost()
     var privacy = PrivacySettings()
     let dnsProxy = EncryptedDNSProxy(resolver: EncryptedDNSProxy.Resolver(rawValue: UserDefaults.standard.string(forKey: "dohResolver") ?? "") ?? .quad9)
     private var controllers: [BrowserWindowController] = []
@@ -48,6 +49,9 @@ final class AppServices {
         }
         runtime.settings = privacy
         runtime.delegate = self
+        runtime.extensionHost = extensions
+        wireExtensions()
+        await extensions.loadInstalled()
         runtime.startHibernation()
         store.runArchive()
         Task { try? await engine.refreshHistoryCache() }
@@ -168,6 +172,7 @@ final class AppServices {
 
 extension AppServices: WebTabDelegate {
     func webTabDidChange(_ tab: WebTab) {
+        extensions.webTabDidChange(tab)
         if let url = tab.url {
             store.update(tab.id) { record in
                 record.url = url
@@ -179,6 +184,9 @@ extension AppServices: WebTabDelegate {
     }
 
     func webTab(_ tab: WebTab, didCommit url: URL, title: String?, typed: Bool) {
+        if tab.id == frontController?.store.currentSpace.selected, extensions.storeExtensionID(for: url) != nil, title == nil || !typed {
+            offerStoreInstall(for: url)
+        }
         guard !isPrivate(tab.id), let history, url.scheme == "http" || url.scheme == "https" else { return }
         Task.detached(priority: .utility) {
             try? await history.recordVisit(url: url, title: title, kind: typed ? .typed : .link, at: Date())

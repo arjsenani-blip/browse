@@ -32,7 +32,7 @@ enum CredentialBanner {
         }
     }
 
-    private static func show(in window: NSWindow?, symbol: String, text: String, primary: String, secondary: String,
+    static func show(in window: NSWindow?, symbol: String, text: String, primary: String, secondary: String,
                              timeout: TimeInterval, primaryAction: @escaping () -> Void, secondaryAction: (() -> Void)? = nil) {
         guard let content = window?.contentView else { return }
         current?.removeFromSuperview()
