@@ -27,7 +27,11 @@ enum DebugSnapshot {
             }
             if args.contains("--reader") { services.frontController?.toggleReader() }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                Task { await capture(services: services, to: out); NSApp.terminate(nil) }
+                Task {
+                    if args.contains("--resources") { await printResources(services: services) }
+                    await capture(services: services, to: out)
+                    NSApp.terminate(nil)
+                }
             }
         }
     }
@@ -56,6 +60,18 @@ enum DebugSnapshot {
         if let tiff = composed.tiffRepresentation, let bmp = NSBitmapImageRep(data: tiff), let png = bmp.representation(using: .png, properties: [:]) {
             try? png.write(to: url)
         }
+    }
+
+    /// Prints every third-party host the current page loaded resources from.
+    static func printResources(services: AppServices) async {
+        guard let c = services.frontController, let id = c.store.selectedTab?.id, let web = c.runtime.tab(id)?.webView else { return }
+        let js = "JSON.stringify([...new Set(performance.getEntriesByType('resource').map(e => { try { return new URL(e.name).hostname } catch (_) { return '' } }))])"
+        let result = try? await web.evaluateJavaScript(js)
+        print("RESOURCE_HOSTS \(web.url?.host() ?? "") \(result as? String ?? "[]")")
+        let globals = try? await web.evaluateJavaScript("JSON.stringify({gtm: !!window.google_tag_manager, googletag: typeof window.googletag === 'object' && !!window.googletag.pubads, fbq: typeof window.fbq, apstag: typeof window.apstag})")
+        print("AD_GLOBALS \(globals as? String ?? "?")")
+        let ruleLists = services.blocking.ruleLists.count
+        print("RULE_LISTS \(ruleLists) RULES \(services.blocking.ruleCount)")
     }
 
     private static func allWebViews(in view: NSView) -> [WKWebView] {

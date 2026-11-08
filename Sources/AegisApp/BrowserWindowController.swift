@@ -73,7 +73,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             window.setFrame(NSRect(origin: .zero, size: size), display: false)
             window.center()
         }
-        sideItem.viewController.view.frame.size.width = Tokens.Size.sidebarDefault
+        if UserDefaults.standard.object(forKey: "NSSplitView Subview Frames AegisSplit") == nil {
+            split.splitView.setPosition(Tokens.Size.sidebarDefault, ofDividerAt: 0)
+        }
 
         observeStore()
         refresh()

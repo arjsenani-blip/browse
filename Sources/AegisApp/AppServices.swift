@@ -35,14 +35,14 @@ final class AppServices {
         }
     }
 
-    func start() {
+    func start() async {
         runtime.policy = blocking
+        blocking.onRulesChanged = { [weak self] in self?.runtime.reloadRules() }
+        await blocking.start()
         runtime.settings = privacy
         runtime.delegate = self
         runtime.startHibernation()
         store.runArchive()
-        blocking.onRulesChanged = { [weak self] in self?.runtime.reloadRules() }
-        blocking.start()
         Task { try? await engine.refreshHistoryCache() }
         saveTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {

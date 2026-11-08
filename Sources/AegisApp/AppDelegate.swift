@@ -12,9 +12,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationDidFinishLaunching(_ notification: Notification) {
         services = AppServices()
         NSApp.mainMenu = Menus.build(target: self)
-        services.start()
-        services.newWindow()
-        DebugSnapshot.runIfRequested(services: services)
+        Task {
+            await services.start()
+            services.newWindow()
+            DebugSnapshot.runIfRequested(services: services)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

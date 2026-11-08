@@ -17,11 +17,34 @@ final class BlockingAdapter: ContentPolicy {
     var onRulesChanged: (() -> Void)?
     private(set) var ruleCount = 0
 
-    func start() {
-        Task {
-            await rebuild()
-            update(force: false, report: nil)
+    private static let idsKey = "blockingRuleListIDs"
+    private static let countKey = "blockingRuleCount"
+
+    /// Loads the lists compiled on a previous launch by identifier (a few ms),
+    /// so pages restored at launch are blocked from their first request.
+    /// Returns once rules are in place, or after `timeout` on a first launch.
+    func start(timeout: TimeInterval = 6) async {
+        if let ids = UserDefaults.standard.stringArray(forKey: Self.idsKey), !ids.isEmpty,
+           let url = ContentRuleCompiler.defaultStoreURL, let store = WKContentRuleListStore(url: url) {
+            var lists: [WKContentRuleList] = []
+            for id in ids {
+                guard let list = try? await store.contentRuleList(forIdentifier: id) else { lists = []; break }
+                lists.append(list)
+            }
+            if !lists.isEmpty {
+                ruleLists = lists
+                ruleCount = UserDefaults.standard.integer(forKey: Self.countKey)
+                log.info("blocking ready from cache: \(lists.count) lists")
+            }
         }
+        let fresh = Task { await rebuild(); update(force: false, report: nil) }
+        guard ruleLists.isEmpty else { return }
+        // First launch: wait for the compile, bounded so the window still appears.
+        let waited = Date()
+        while ruleLists.isEmpty, Date().timeIntervalSince(waited) < timeout {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        _ = fresh
     }
 
     func cosmeticScript(forHost host: String) -> String? {
@@ -55,10 +78,13 @@ final class BlockingAdapter: ContentPolicy {
             log.error("rule compile produced nothing; keeping previous rules")
             return
         }
+        let changed = lists.map(\.identifier) != ruleLists.map(\.identifier)
         ruleLists = lists
         cosmetic = result.cosmetic
         ruleCount = result.ruleCount
-        log.info("blocking ready: \(result.ruleCount) rules in \(lists.count) lists, \(Date().timeIntervalSince(start), format: .fixed(precision: 2))s")
-        onRulesChanged?()
+        UserDefaults.standard.set(lists.map(\.identifier), forKey: Self.idsKey)
+        UserDefaults.standard.set(result.ruleCount, forKey: Self.countKey)
+        log.info("blocking compiled: \(result.ruleCount) rules in \(lists.count) lists, \(Date().timeIntervalSince(start), format: .fixed(precision: 2))s")
+        if changed { onRulesChanged?() }
     }
 }
