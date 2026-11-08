@@ -29,6 +29,18 @@ public final class WebTab: NSObject {
     public private(set) var isSecure = false
     public private(set) var isReaderable = false
     public private(set) var activity: TabActivity = []
+    public enum MediaState: Sendable { case none, playing, paused }
+    public private(set) var mediaState: MediaState = .none
+    public private(set) var hasVideo = false
+
+    public func togglePlayback() {
+        webView?.evaluateJavaScript(MediaScript.togglePlayback, in: nil, in: Worlds.media)
+    }
+
+    public func togglePictureInPicture() {
+        webView?.evaluateJavaScript(MediaScript.pictureInPicture, in: nil, in: Worlds.media)
+    }
+
     /// Snapshot shown while a sleeping tab wakes.
     public private(set) var snapshot: NSImage?
 
@@ -86,6 +98,7 @@ public final class WebTab: NSObject {
         webView = nil
         activity = []
         isLoading = false
+        mediaState = .none
         delegate?.webTabDidChange(self)
         return state
     }
@@ -201,7 +214,12 @@ extension WebTab: WKNavigationDelegate {
     }
 
     public func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
-        response.canShowMIMEType ? .allow : .download
+        if let http = response.response as? HTTPURLResponse,
+           let disposition = http.value(forHTTPHeaderField: "Content-Disposition")?.lowercased(),
+           disposition.hasPrefix("attachment") {
+            return .download
+        }
+        return response.canShowMIMEType ? .allow : .download
     }
 
     public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -271,6 +289,14 @@ extension WebTab: WKUIDelegate {
 
 extension WebTab {
     func receiveScriptMessage(_ body: [String: Any]) {
+        if body["type"] as? String == "media" {
+            let state = body["state"] as? String
+            if state == "playing" { activity.insert(.playingMedia) } else { activity.remove(.playingMedia) }
+            mediaState = state == "playing" ? .playing : state == "paused" ? .paused : .none
+            hasVideo = (body["kind"] as? String) == "video"
+            delegate?.webTabDidChange(self)
+            return
+        }
         if body["type"] as? String == "formDirty" { setFormDirty(body["dirty"] as? Bool ?? false) }
         delegate?.webTab(self, autofillMessage: body)
     }

@@ -75,6 +75,20 @@ import Testing
         #expect(restored.currentSpace.selected == a)
     }
 
+    @Test func removeSpaceDropsTabsAndProfile() {
+        let store = BrowserStore()
+        let work = store.addSpace(name: "Work", accentHue: 0.6, newProfile: true)
+        store.currentSpaceID = work.id
+        let t = store.openTab(URL(string: "https://w.com"))
+        #expect(store.removeSpace(work.id) == [t])
+        #expect(store.tabs[t] == nil)
+        #expect(store.spaces.count == 1)
+        #expect(store.profiles.count == 1)
+        #expect(store.currentSpaceID == store.spaces[0].id)
+        #expect(store.removeSpace(store.spaces[0].id).isEmpty)   // last space stays
+        #expect(store.spaces.count == 1)
+    }
+
     @Test func spacesHaveSeparateProfilesWhenAsked() {
         let store = BrowserStore()
         let work = store.addSpace(name: "Work", accentHue: 0.6, newProfile: true)

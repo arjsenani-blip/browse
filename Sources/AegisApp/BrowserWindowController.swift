@@ -16,6 +16,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private let sidebar = SidebarViewController()
     private let card = ContentCard()
     private let palette = PaletteController()
+    private let library = LibraryController()
     private lazy var reader = ReaderView()
     private var readerFor: TabID?
     private var shownTab: TabID?
@@ -143,6 +144,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 loading: w?.isLoading ?? false,
                 playing: t.activity.contains(.playingMedia))
         }
+        s.spaceNames = store.spaces.map(\.name)
+        s.spaceHues = store.spaces.map(\.accentHue)
+        s.activeDownloads = DownloadCenter.shared.active.count
+        s.nowPlaying = nowPlaying()
         s.favorites = space.favorites.compactMap(row)
         s.pinned = space.pinned.compactMap(row)
         s.today = space.today.compactMap(row)
@@ -158,6 +163,24 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         sidebar.apply(s)
         showSelected()
         window?.title = store.selectedTab?.displayTitle ?? "Aegis"
+    }
+
+    /// The most relevant background media: playing first, else paused.
+    private func nowPlaying() -> NowPlaying? {
+        let selected = store.currentSpace.selected
+        var best: (TabID, WebTab)?
+        for space in store.spaces {
+            for id in space.allTabs where id != selected {
+                guard let t = runtime.tab(id), t.isAwake, t.mediaState != .none else { continue }
+                if t.mediaState == .playing { best = (id, t); break }
+                if best == nil { best = (id, t) }
+            }
+            if best?.1.mediaState == .playing { break }
+        }
+        guard let (id, t) = best else { return nil }
+        var title = t.title.isEmpty ? (store.tabs[id]?.displayTitle ?? "") : t.title
+        if title == t.url?.host(), let file = t.url?.lastPathComponent, !file.isEmpty, file != "/" { title = file.removingPercentEncoding ?? file }
+        return NowPlaying(tab: id, title: title, url: t.url, playing: t.mediaState == .playing, hasVideo: t.hasVideo)
     }
 
     private func showSelected() {
@@ -194,6 +217,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     func debugSetPaletteQuery(_ q: String) { palette.model.query = q }
 
     func navigate(to url: URL, newTab: Bool, background: Bool = false, typed: Bool = true) {
+        if palette.isOpen { palette.dismiss() }
         if newTab || store.selectedTab == nil {
             let id = store.openTab(url, select: !background)
             if !background { runtime.tab(id)?.load(url, typed: typed) }
@@ -298,13 +322,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func newSpace() {
-        let hues = [0.48, 0.60, 0.08, 0.92, 0.33, 0.75]
+        let hues = [0.48, 0.60, 0.08, 0.92, 0.33, 0.68]
+        sidebar.cacheCurrentSpaceSnapshot()
         let space = store.addSpace(name: "Space \(store.spaces.count + 1)", accentHue: hues[store.spaces.count % hues.count], newProfile: true)
         store.currentSpaceID = space.id
+        // Ask for a name right away, like Arc; Esc keeps the default.
+        DispatchQueue.main.async { [weak self] in
+            if !CommandLine.arguments.contains("--snapshot") { self?.renameSpace() }
+        }
     }
 
     func switchSpace(_ delta: Int) {
         exitReader()
+        sidebar.cacheCurrentSpaceSnapshot()
         store.switchSpace(by: delta)
     }
 
@@ -358,7 +388,100 @@ extension BrowserWindowController: SidebarDelegate {
     func sidebarSwitchSpace(_ index: Int) {
         guard store.spaces.indices.contains(index) else { return }
         exitReader()
+        sidebar.cacheCurrentSpaceSnapshot()
         store.currentSpaceID = store.spaces[index].id
+    }
+
+    /// Background media if any, else the current tab.
+    func toggleMediaAnywhere() {
+        if let id = nowPlaying()?.tab ?? store.selectedTab?.id { runtime.tab(id)?.togglePlayback() }
+    }
+    func pictureInPictureAnywhere() {
+        if let id = nowPlaying()?.tab ?? store.selectedTab?.id { runtime.tab(id)?.togglePictureInPicture() }
+    }
+
+    func sidebarSpaceMenu() -> NSMenu? {
+        let menu = NSMenu()
+        menu.addItem(ClosureMenuItem(title: "Rename Space…") { [weak self] in self?.renameSpace() })
+        let colors = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        for (name, hue) in BrowserWindowController.spaceColors {
+            let item = ClosureMenuItem(title: name) { [weak self] in
+                guard let self else { return }
+                self.store.renameSpace(self.store.currentSpaceID, name: self.store.currentSpace.name, accentHue: hue)
+            }
+            item.image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { r in
+                Tokens.accent(hue: hue).setFill(); NSBezierPath(ovalIn: r).fill(); return true
+            }
+            item.state = abs(store.currentSpace.accentHue - hue) < 0.01 ? .on : .off
+            sub.addItem(item)
+        }
+        colors.submenu = sub
+        menu.addItem(colors)
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "New Space") { [weak self] in self?.newSpace() })
+        if store.spaces.count > 1 {
+            menu.addItem(ClosureMenuItem(title: "Delete “\(store.currentSpace.name)”…") { [weak self] in self?.deleteSpace() })
+        }
+        return menu
+    }
+
+    static let spaceColors: [(String, Double)] = [("Teal", 0.48), ("Blue", 0.60), ("Indigo", 0.68), ("Pink", 0.92), ("Red", 0.0), ("Orange", 0.08), ("Yellow", 0.13), ("Green", 0.33), ("Graphite", 0.55)]
+
+    func renameSpace() {
+        let alert = NSAlert()
+        alert.messageText = "Rename Space"
+        let field = NSTextField(string: store.currentSpace.name)
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard let window, alert.runModal() == .alertFirstButtonReturn else { return }
+        _ = window
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        if !name.isEmpty { store.renameSpace(store.currentSpaceID, name: name) }
+    }
+
+    func deleteSpace() {
+        let space = store.currentSpace
+        let alert = NSAlert()
+        alert.messageText = "Delete “\(space.name)”?"
+        alert.informativeText = "Closes its \(space.allTabs.count) tabs and deletes the space's cookies and website data."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let profile = store.profile(for: space)
+        let sharedProfile = store.spaces.filter { $0.profileID == profile.id }.count > 1
+        for id in space.allTabs { runtime.discard(id) }
+        store.removeSpace(space.id)
+        if !sharedProfile {
+            let context = runtime.context(for: profile)
+            Task { await context.clearData() }
+        }
+    }
+
+    func sidebarToggleMedia(_ id: TabID) { runtime.tab(id)?.togglePlayback() }
+    func sidebarPictureInPicture(_ id: TabID) { runtime.tab(id)?.togglePictureInPicture() }
+    func sidebarOpenLibrary(from view: NSView) { openLibrary(from: view) }
+
+    func sidebarWillSwipe(toSpace index: Int) {
+        // Start waking the target space's tab so it's painting by the time the swipe lands.
+        guard store.spaces.indices.contains(index), let id = store.spaces[index].selected else { return }
+        _ = runtime.tab(id)
+    }
+
+    func openLibrary(from view: NSView? = nil, tab: LibraryModel.Tab? = nil) {
+        library.model.accentHue = store.currentSpace.accentHue
+        library.model.items = DownloadCenter.shared.items.map(ChromeUI.LibraryItem.init)
+        guard let anchor = view ?? sidebar.view.window.flatMap({ _ in sidebar.view }) else { return }
+        library.toggle(relativeTo: anchor, actions: self, tab: tab)
+    }
+
+    func refreshLibrary() {
+        library.model.items = DownloadCenter.shared.items.map(ChromeUI.LibraryItem.init)
+        scheduleRefresh()
     }
 
     func sidebarContextMenu(for id: TabID) -> NSMenu? {
@@ -400,4 +523,37 @@ final class ClosureMenuItem: NSMenuItem {
     }
     required init(coder: NSCoder) { fatalError() }
     @objc private func fire() { handler() }
+}
+
+// MARK: - Library
+
+extension ChromeUI.LibraryItem {
+    init(_ d: DownloadCenter.Item) {
+        self.init(id: d.id, name: d.filename, file: d.destination, source: d.sourceURL, date: d.started,
+                  bytes: d.totalBytes, progress: d.finished || d.failed ? nil : d.fractionCompleted,
+                  failed: d.failed, isMedia: d.isMedia, exists: d.fileExists)
+    }
+}
+
+extension BrowserWindowController: LibraryActions {
+    func libraryOpen(_ item: ChromeUI.LibraryItem) {
+        if let file = item.file { NSWorkspace.shared.open(file) }
+    }
+    func libraryOpenInTab(_ item: ChromeUI.LibraryItem) {
+        guard let file = item.file else { return }
+        let id = store.openTab(file)
+        runtime.show(id)
+        runtime.tab(id)?.webView?.loadFileURL(file, allowingReadAccessTo: file.deletingLastPathComponent())
+    }
+    func libraryReveal(_ item: ChromeUI.LibraryItem) {
+        if let file = item.file { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+    }
+    func libraryRemove(_ item: ChromeUI.LibraryItem) {
+        DownloadCenter.shared.remove(item.id)
+        refreshLibrary()
+    }
+    func libraryClearFinished() {
+        DownloadCenter.shared.clearFinished()
+        refreshLibrary()
+    }
 }

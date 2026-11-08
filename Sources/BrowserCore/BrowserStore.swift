@@ -130,6 +130,19 @@ public final class BrowserStore {
         }
     }
 
+    /// Removes a space and its tabs. The last space can't be removed.
+    @discardableResult
+    public func removeSpace(_ id: UUID) -> [TabID] {
+        guard spaces.count > 1, let i = spaces.firstIndex(where: { $0.id == id }) else { return [] }
+        let removed = spaces[i].allTabs
+        for t in removed { tabs[t] = nil }
+        let profile = spaces[i].profileID
+        spaces.remove(at: i)
+        if !spaces.contains(where: { $0.profileID == profile }) { profiles.removeAll { $0.id == profile } }
+        if currentSpaceID == id { currentSpaceID = spaces[max(0, i - 1)].id }
+        return removed
+    }
+
     public func setArchiveInterval(_ seconds: TimeInterval) {
         for i in spaces.indices { spaces[i].archiveAfter = seconds }
     }

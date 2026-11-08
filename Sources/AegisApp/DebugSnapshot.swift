@@ -18,6 +18,12 @@ enum DebugSnapshot {
                 if let url = URL(string: raw) { services.frontController?.navigate(to: url, newTab: true, typed: false) }
             }
         }
+        if let k = args.firstIndex(of: "--space2-open"), k + 1 < args.count, let url = URL(string: args[k + 1]) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay / 2) {
+                services.frontController?.newSpace()
+                services.frontController?.navigate(to: url, newTab: true, typed: false)
+            }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             if let k = args.firstIndex(of: "--palette") {
                 services.frontController?.openPalette(.command)
@@ -35,11 +41,22 @@ enum DebugSnapshot {
                 }
                 c.refresh()
             }
+            if args.contains("--then-select-first") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    if let first = services.store.currentSpace.today.last { services.frontController?.select(first) }
+                }
+            }
+            if args.contains("--playall") {
+                for space in services.store.spaces { for id in space.allTabs { services.runtime.tab(id)?.togglePlayback() } }
+            }
+            if args.contains("--library") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { services.frontController?.openLibrary(tab: args.contains("--media") ? .media : .downloads) }
+            }
             if args.contains("--reader") { services.frontController?.toggleReader() }
             if let e = args.firstIndex(of: "--eval"), e + 1 < args.count,
                let c = services.frontController, let id = c.store.selectedTab?.id, let web = c.runtime.tab(id)?.webView {
                 Task {
-                    let r = try? await web.evaluateJavaScript(args[e + 1])
+                    let r = try? await web.callAsyncJavaScript(args[e + 1], arguments: [:], in: nil, contentWorld: .page)
                     print("EVAL \(r.map { "\($0)" } ?? "nil")"); fflush(stdout)
                 }
             }
@@ -85,6 +102,13 @@ enum DebugSnapshot {
         }
         image.draw(in: bounds)
         composed.unlockFocus()
+        // Popovers live in their own windows; save each beside the main image.
+        for (n, w) in NSApp.windows.enumerated() where w.isVisible && w !== window && w.className.contains("Popover") {
+            if let v = w.contentView, let r = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+                v.cacheDisplay(in: v.bounds, to: r)
+                try? r.representation(using: .png, properties: [:])?.write(to: url.deletingPathExtension().appendingPathExtension("popover\(n).png"))
+            }
+        }
         if let tiff = composed.tiffRepresentation, let bmp = NSBitmapImageRep(data: tiff), let png = bmp.representation(using: .png, properties: [:]) {
             try? png.write(to: url)
         }

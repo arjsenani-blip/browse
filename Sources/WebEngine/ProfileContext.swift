@@ -45,6 +45,7 @@ public final class ProfileContext {
         installScripts()
         reloadRules()
         userContent.add(ScriptRelay(self), contentWorld: Worlds.autofill, name: "aegisAutofill")
+        userContent.add(ScriptRelay(self), contentWorld: Worlds.media, name: "aegisMedia")
     }
 
     func register(_ tab: WebTab, for view: WKWebView) { live[ObjectIdentifier(view)] = WeakTab(tab: tab) }
@@ -89,6 +90,7 @@ public final class ProfileContext {
         // Reader libraries live only in the isolated reader world.
         let reader = Bundled.readerable + "\n" + Bundled.readability + "\n" + Bundled.purify
         userContent.addUserScript(WKUserScript(source: reader, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Worlds.reader))
+        userContent.addUserScript(WKUserScript(source: MediaScript.source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Worlds.media))
         if !Bundled.autofill.isEmpty {
             userContent.addUserScript(WKUserScript(source: Bundled.autofill, injectionTime: .atDocumentEnd, forMainFrameOnly: false, in: Worlds.autofill))
         }

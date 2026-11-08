@@ -28,7 +28,24 @@ public struct SidebarState: Equatable {
     public var pinned: [Row] = []
     public var today: [Row] = []
     public var selected: TabID?
+    /// Every space's name and hue, for the swipe's neighbour placeholders.
+    public var spaceNames: [String] = []
+    public var spaceHues: [Double] = []
+    public var nowPlaying: NowPlaying?
+    public var activeDownloads = 0
     public init() {}
+}
+
+/// Media playing in a tab you're not looking at.
+public struct NowPlaying: Equatable {
+    public var tab: TabID
+    public var title: String
+    public var url: URL?
+    public var playing: Bool
+    public var hasVideo: Bool
+    public init(tab: TabID, title: String, url: URL?, playing: Bool, hasVideo: Bool) {
+        self.tab = tab; self.title = title; self.url = url; self.playing = playing; self.hasVideo = hasVideo
+    }
 }
 
 @MainActor
@@ -43,6 +60,12 @@ public protocol SidebarDelegate: AnyObject {
     func sidebarMove(_ id: TabID, to tier: TabTier, index: Int)
     func sidebarSwitchSpace(_ index: Int)
     func sidebarContextMenu(for id: TabID) -> NSMenu?
+    func sidebarToggleMedia(_ id: TabID)
+    func sidebarPictureInPicture(_ id: TabID)
+    func sidebarOpenLibrary(from view: NSView)
+    /// The swipe is about to show this space; warm its content.
+    func sidebarWillSwipe(toSpace index: Int)
+    func sidebarSpaceMenu() -> NSMenu?
 }
 
 /// The vertical sidebar: navigation, address pill, favorites grid, pinned and
@@ -61,6 +84,16 @@ public final class SidebarViewController: NSViewController {
     private let spaceDots = NSStackView()
     private let spaceLabel = NSTextField(labelWithString: "")
     private var rows: [Item] = []
+    private let content = NSView()
+    private let nowPlayingView = NowPlayingStrip()
+    private let libraryButton = SidebarViewController.iconButton("tray.and.arrow.down", "Library: Downloads and Media")
+    private let libraryBadge = NSTextField(labelWithString: "")
+    // Swipe between spaces
+    private let leftPane = NSImageView()
+    private let rightPane = NSImageView()
+    private let wash = NSView()
+    private var snapshots: [Int: NSImage] = [:]
+    private var swiping = false
 
     enum Item: Equatable {
         case tab(SidebarState.Row, TabTier)
@@ -69,8 +102,34 @@ public final class SidebarViewController: NSViewController {
     }
 
     public override func loadView() {
-        let root = NSView()
-        root.translatesAutoresizingMaskIntoConstraints = false
+        let host = SwipeHostView()
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.wantsLayer = true
+        host.layer?.masksToBounds = true
+        host.onSwipeBegan = { [weak self] event in self?.trackSwipe(event) ?? false }
+        wash.wantsLayer = true
+        for v in [wash, leftPane, rightPane, content] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            host.addSubview(v)
+        }
+        content.wantsLayer = true
+        for pane in [leftPane, rightPane] {
+            pane.imageScaling = .scaleNone
+            pane.imageAlignment = .alignTopLeft
+            pane.wantsLayer = true
+            pane.isHidden = true
+        }
+        NSLayoutConstraint.activate([
+            wash.leadingAnchor.constraint(equalTo: host.leadingAnchor), wash.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            wash.topAnchor.constraint(equalTo: host.topAnchor), wash.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: host.leadingAnchor), content.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            content.topAnchor.constraint(equalTo: host.topAnchor), content.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            leftPane.trailingAnchor.constraint(equalTo: content.leadingAnchor), leftPane.widthAnchor.constraint(equalTo: content.widthAnchor),
+            leftPane.topAnchor.constraint(equalTo: host.topAnchor), leftPane.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            rightPane.leadingAnchor.constraint(equalTo: content.trailingAnchor), rightPane.widthAnchor.constraint(equalTo: content.widthAnchor),
+            rightPane.topAnchor.constraint(equalTo: host.topAnchor), rightPane.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+        ])
+        let root = content
 
         let nav = NSStackView(views: [backButton, forwardButton, reloadButton])
         nav.spacing = 6
@@ -101,7 +160,9 @@ public final class SidebarViewController: NSViewController {
             guard let self, row >= 0, row < self.rows.count, case .tab(let r, _) = self.rows[row] else { return nil }
             return self.delegate?.sidebarContextMenu(for: r.id)
         }
-        let scroll = NSScrollView()
+        let scroll = SwipeAwareScrollView()
+        scroll.onSwipeBegan = { [weak self] event in self?.trackSwipe(event) ?? false }
+        scroll.horizontalScrollElasticity = .none
         scroll.documentView = table
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
@@ -109,15 +170,45 @@ public final class SidebarViewController: NSViewController {
         scroll.scrollerStyle = .overlay
         scroll.automaticallyAdjustsContentInsets = false
 
+        let spaceMenuHost = MenuHostView()
+        spaceMenuHost.menuProvider = { [weak self] in self?.delegate?.sidebarSpaceMenu() }
         spaceLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         spaceLabel.textColor = Tokens.secondaryInk
         spaceDots.spacing = 8
         let newTab = SidebarViewController.iconButton("plus", "New Tab (⌘T)")
         newTab.target = self; newTab.action = #selector(newTabClicked)
-        let footer = NSStackView(views: [spaceDots, spaceLabel, NSView(), newTab])
+        libraryButton.target = self; libraryButton.action = #selector(libraryClicked)
+        libraryBadge.font = .monospacedDigitSystemFont(ofSize: 9, weight: .bold)
+        libraryBadge.textColor = .white
+        libraryBadge.alignment = .center
+        libraryBadge.wantsLayer = true
+        libraryBadge.layer?.cornerRadius = 6
+        libraryBadge.isHidden = true
+        libraryBadge.translatesAutoresizingMaskIntoConstraints = false
+        libraryButton.addSubview(libraryBadge)
+        NSLayoutConstraint.activate([
+            libraryBadge.topAnchor.constraint(equalTo: libraryButton.topAnchor, constant: -3),
+            libraryBadge.trailingAnchor.constraint(equalTo: libraryButton.trailingAnchor, constant: 3),
+            libraryBadge.heightAnchor.constraint(equalToConstant: 12),
+            libraryBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 12),
+        ])
+        let spaceGroup = NSStackView(views: [spaceDots, spaceLabel])
+        spaceGroup.spacing = 8
+        spaceGroup.translatesAutoresizingMaskIntoConstraints = false
+        spaceMenuHost.addSubview(spaceGroup)
+        NSLayoutConstraint.activate([
+            spaceGroup.leadingAnchor.constraint(equalTo: spaceMenuHost.leadingAnchor), spaceGroup.trailingAnchor.constraint(equalTo: spaceMenuHost.trailingAnchor),
+            spaceGroup.topAnchor.constraint(equalTo: spaceMenuHost.topAnchor), spaceGroup.bottomAnchor.constraint(equalTo: spaceMenuHost.bottomAnchor),
+        ])
+        spaceMenuHost.toolTip = "Swipe with two fingers to switch spaces. Right-click to rename."
+        let footer = NSStackView(views: [spaceMenuHost, NSView(), libraryButton, newTab])
         footer.spacing = 8
+        nowPlayingView.onToggle = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarToggleMedia(id) } }
+        nowPlayingView.onPiP = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarPictureInPicture(id) } }
+        nowPlayingView.onOpen = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarSelect(id) } }
+        nowPlayingView.isHidden = true
 
-        for v in [nav, urlPill, favoritesGrid, scroll, footer] as [NSView] {
+        for v in [nav, urlPill, favoritesGrid, scroll, nowPlayingView, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -135,13 +226,16 @@ public final class SidebarViewController: NSViewController {
             scroll.topAnchor.constraint(equalTo: favoritesGrid.bottomAnchor, constant: Tokens.Space.sectionGap),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: pad),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -pad),
-            scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
+            scroll.bottomAnchor.constraint(equalTo: nowPlayingView.topAnchor, constant: -6),
+            nowPlayingView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: pad),
+            nowPlayingView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -pad),
+            nowPlayingView.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
             footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: pad + 10),
             footer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -pad - 4),
             footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
             footer.heightAnchor.constraint(equalToConstant: 24),
         ])
-        view = root
+        view = host
     }
 
     public func apply(_ new: SidebarState) {
@@ -151,6 +245,21 @@ public final class SidebarViewController: NSViewController {
         forwardButton.isEnabled = new.canGoForward
         reloadButton.image = NSImage(systemSymbolName: new.isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: new.isLoading ? "Stop" : "Reload")
         urlPill.update(host: new.host, secure: new.isSecure, blocker: new.blockerOn, hue: new.accentHue)
+        if old.nowPlaying != new.nowPlaying {
+            if let np = new.nowPlaying { nowPlayingView.update(np, hue: new.accentHue) }
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = Tokens.Motion.duration(0.2)
+                nowPlayingView.animator().isHidden = new.nowPlaying == nil
+            }
+        }
+        libraryBadge.isHidden = new.activeDownloads == 0
+        libraryBadge.stringValue = "\(new.activeDownloads)"
+        libraryBadge.layer?.backgroundColor = Tokens.accent(hue: new.accentHue).cgColor
+        libraryButton.contentTintColor = new.activeDownloads > 0 ? Tokens.accent(hue: new.accentHue) : Tokens.secondaryInk
+        if !swiping { wash.layer?.backgroundColor = Tokens.accent(hue: new.accentHue).withAlphaComponent(0.05).cgColor }
+        if old.spaceIndex != new.spaceIndex, !swiping, old.spaceCount == new.spaceCount, !old.spaceNames.isEmpty {
+            slideIn(from: new.spaceIndex > old.spaceIndex ? 1 : -1)
+        }
 
         if old.favorites != new.favorites || old.selected != new.selected || old.accentHue != new.accentHue || favoritesGrid.arrangedSubviews.isEmpty {
             rebuildFavorites()
@@ -202,6 +311,125 @@ public final class SidebarViewController: NSViewController {
     @objc private func forward() { delegate?.sidebarForward() }
     @objc private func reload() { delegate?.sidebarReload() }
     @objc private func newTabClicked() { delegate?.sidebarNewTab() }
+    @objc private func libraryClicked() { delegate?.sidebarOpenLibrary(from: libraryButton) }
+
+    // MARK: Swipe between spaces
+
+    /// Remembers how the current space looks, so swiping back to it can show it.
+    public func cacheCurrentSpaceSnapshot() {
+        guard content.bounds.width > 0, let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return }
+        content.cacheDisplay(in: content.bounds, to: rep)
+        let image = NSImage(size: content.bounds.size)
+        image.addRepresentation(rep)
+        snapshots[state.spaceIndex] = image
+    }
+
+    private func neighbourImage(_ index: Int) -> NSImage? {
+        guard index >= 0, index < state.spaceCount else { return nil }
+        if let cached = snapshots[index], cached.size == content.bounds.size { return cached }
+        // Never visited this session: a quiet placeholder with the space's name.
+        let size = content.bounds.size
+        let name = index < state.spaceNames.count ? state.spaceNames[index] : "Space \(index + 1)"
+        let hue = index < state.spaceHues.count ? state.spaceHues[index] : state.accentHue
+        return NSImage(size: size, flipped: true) { _ in
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 15, weight: .semibold), .foregroundColor: Tokens.accent(hue: hue)]
+            (name as NSString).draw(at: NSPoint(x: 20, y: 52), withAttributes: attrs)
+            NSColor.tertiaryLabelColor.withAlphaComponent(0.25).setFill()
+            for row in 0..<6 {
+                NSBezierPath(roundedRect: NSRect(x: 20, y: 96 + CGFloat(row) * 34, width: size.width * [0.6, 0.45, 0.7, 0.5, 0.65, 0.4][row], height: 8), xRadius: 4, yRadius: 4).fill()
+            }
+            return true
+        }
+    }
+
+    /// Interactive two-finger swipe, tracked by the system (rubber-banding and
+    /// the commit decision match Safari and Finder). Layers move; nothing lays out.
+    private func trackSwipe(_ event: NSEvent) -> Bool {
+        guard state.spaceCount > 1, !swiping else { return false }
+        let index = state.spaceIndex, count = state.spaceCount
+        let width = content.bounds.width
+        cacheCurrentSpaceSnapshot()
+        leftPane.image = neighbourImage(index - 1)
+        rightPane.image = neighbourImage(index + 1)
+        leftPane.isHidden = leftPane.image == nil
+        rightPane.isHidden = rightPane.image == nil
+        swiping = true
+        let fromHue = state.accentHue
+        var warmed = false
+        // gestureAmount > 0 means a swipe to the right, which reveals the space on the left.
+        event.trackSwipeEvent(options: [.lockDirection, .clampGestureAmount],
+                              dampenAmountThresholdMin: -CGFloat(count - 1 - index), max: CGFloat(index)) { [weak self] amount, phase, complete, _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let p = amount
+                self.setSwipeOffset(p * width, fromHue: fromHue)
+                if !warmed, abs(p) > 0.35 {
+                    warmed = true
+                    self.delegate?.sidebarWillSwipe(toSpace: p > 0 ? index - 1 : index + 1)
+                }
+                if complete {
+                    let target = p > 0.5 ? index - 1 : (p < -0.5 ? index + 1 : index)
+                    self.finishSwipe(to: target)
+                }
+                _ = phase
+            }
+        }
+        return true
+    }
+
+    private func setSwipeOffset(_ x: CGFloat, fromHue: Double) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let t = CATransform3DMakeTranslation(x, 0, 0)
+        content.layer?.transform = t
+        leftPane.layer?.transform = t
+        rightPane.layer?.transform = t
+        // Cross-fade the space tint with the distance travelled.
+        let w = max(1, content.bounds.width)
+        let neighbour = x > 0 ? state.spaceIndex - 1 : state.spaceIndex + 1
+        if neighbour >= 0, neighbour < state.spaceHues.count {
+            let f = min(1, abs(x) / w)
+            let a = Tokens.accent(hue: fromHue).withAlphaComponent(0.05 * (1 - f))
+            let b = Tokens.accent(hue: state.spaceHues[neighbour]).withAlphaComponent(0.05 * f)
+            wash.layer?.backgroundColor = (a.blended(withFraction: f, of: b) ?? a).cgColor
+        }
+        CATransaction.commit()
+    }
+
+    private func finishSwipe(to target: Int) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for v in [content, leftPane, rightPane] { v.layer?.transform = CATransform3DIdentity }
+        leftPane.isHidden = true
+        rightPane.isHidden = true
+        CATransaction.commit()
+        swiping = false
+        if target != state.spaceIndex { delegate?.sidebarSwitchSpace(target) }
+    }
+
+    /// Keyboard or dot switch: the new space slides in with a spring (or fades
+    /// with Reduce Motion), matching the swipe's direction.
+    private func slideIn(from direction: CGFloat) {
+        guard let layer = content.layer else { return }
+        if Tokens.Motion.reduceMotion {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.18
+            layer.add(fade, forKey: "spaceFade")
+            return
+        }
+        let spring = CASpringAnimation(keyPath: "transform.translation.x")
+        let response = 0.32, damping = 1.0
+        spring.mass = 1
+        spring.stiffness = pow(2 * .pi / response, 2)
+        spring.damping = 4 * .pi * damping / response
+        spring.fromValue = direction * content.bounds.width * 0.35
+        spring.toValue = 0
+        spring.duration = spring.settlingDuration
+        layer.add(spring, forKey: "spaceSlide")
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.4; fade.toValue = 1; fade.duration = 0.22
+        layer.add(fade, forKey: "spaceFade")
+    }
 
     @objc private func rowClicked() {
         let row = table.clickedRow
@@ -544,4 +772,103 @@ final class SpaceDot: NSView {
         layer?.backgroundColor = (on ? Tokens.accent(hue: hue) : NSColor.tertiaryLabelColor).cgColor
     }
     override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
+// MARK: - Swipe plumbing
+
+/// Claims horizontal two-finger swipes that begin over the sidebar.
+final class SwipeHostView: NSView {
+    var onSwipeBegan: ((NSEvent) -> Bool)?
+    override func scrollWheel(with event: NSEvent) {
+        if SwipeHostView.isSwipeStart(event), onSwipeBegan?(event) == true { return }
+        super.scrollWheel(with: event)
+    }
+
+    static func isSwipeStart(_ e: NSEvent) -> Bool {
+        e.phase == .began && e.hasPreciseScrollingDeltas
+            && abs(e.scrollingDeltaX) > abs(e.scrollingDeltaY) * 1.5
+            && NSEvent.isSwipeTrackingFromScrollEventsEnabled
+    }
+}
+
+/// The tab list scrolls vertically but hands horizontal swipes to the space switcher.
+final class SwipeAwareScrollView: NSScrollView {
+    var onSwipeBegan: ((NSEvent) -> Bool)?
+    override func scrollWheel(with event: NSEvent) {
+        if SwipeHostView.isSwipeStart(event), onSwipeBegan?(event) == true { return }
+        super.scrollWheel(with: event)
+    }
+}
+
+/// The mini player for media in a background tab: title, play/pause, PiP.
+final class NowPlayingStrip: NSView {
+    var onToggle: (() -> Void)?
+    var onPiP: (() -> Void)?
+    var onOpen: (() -> Void)?
+    private let icon = NSImageView()
+    private let title = NSTextField(labelWithString: "")
+    private let host = NSTextField(labelWithString: "")
+    private let play = SidebarViewController.iconButton("pause.fill", "Pause")
+    private let pip = SidebarViewController.iconButton("pip.enter", "Picture in Picture")
+    private var hue = 0.48
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = Tokens.Radius.tile
+        layer?.cornerCurve = .continuous
+        title.font = .systemFont(ofSize: 12, weight: .medium)
+        title.lineBreakMode = .byTruncatingTail
+        host.font = .systemFont(ofSize: 10.5)
+        host.textColor = Tokens.secondaryInk
+        let text = NSStackView(views: [title, host])
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 1
+        play.target = self; play.action = #selector(toggle)
+        pip.target = self; pip.action = #selector(pipTapped)
+        let row = NSStackView(views: [icon, text, NSView(), pip, play])
+        row.spacing = 8
+        row.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 8)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor), row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor), row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16), icon.heightAnchor.constraint(equalToConstant: 16),
+            heightAnchor.constraint(equalToConstant: 44),
+        ])
+        text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Now playing")
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(_ np: NowPlaying, hue: Double) {
+        self.hue = hue
+        title.stringValue = np.title
+        host.stringValue = np.url?.host() ?? ""
+        icon.image = Favicons.shared.cached(for: np.url) ?? Favicons.placeholder()
+        play.image = NSImage(systemSymbolName: np.playing ? "pause.fill" : "play.fill", accessibilityDescription: np.playing ? "Pause" : "Play")
+        play.toolTip = np.playing ? "Pause" : "Play"
+        pip.isHidden = !np.hasVideo
+        needsDisplay = true
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.backgroundColor = Tokens.selectionFill(hue: hue).cgColor
+    }
+
+    override func mouseDown(with event: NSEvent) { onOpen?() }
+    @objc private func toggle() { onToggle?() }
+    @objc private func pipTapped() { onPiP?() }
+}
+
+/// Shows a menu on right-click or Control-click; clicks pass through to children.
+final class MenuHostView: NSView {
+    var menuProvider: (() -> NSMenu?)?
+    override func menu(for event: NSEvent) -> NSMenu? { menuProvider?() }
 }

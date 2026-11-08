@@ -116,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func find() { front?.showFind() }
     @objc func commandPalette() { front?.openPalette(.command) }
     @objc func toggleSidebar() { front?.toggleSidebar() }
+    @objc func showLibrary() { front?.openLibrary() }
     @objc func toggleReader() { front?.toggleReader() }
     @objc func cycleReaderTheme() { front?.cycleReaderTheme() }
     @objc func reload() { front?.sidebarReload() }

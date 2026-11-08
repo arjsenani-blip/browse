@@ -50,6 +50,7 @@ enum Menus {
         main.addItem(submenu("View", [
             item("Command Palette", #selector(AppDelegate.commandPalette), "k", target: target),
             item("Toggle Sidebar", #selector(AppDelegate.toggleSidebar), "s", target: target),
+            item("Downloads and Media", #selector(AppDelegate.showLibrary), "j", [.command, .option], target: target),
             item("Reader", #selector(AppDelegate.toggleReader), "r", [.command, .shift], target: target),
             item("Reader Theme", #selector(AppDelegate.cycleReaderTheme), "r", [.command, .option], target: target),
             .separator(),

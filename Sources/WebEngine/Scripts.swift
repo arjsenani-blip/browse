@@ -20,6 +20,7 @@ public enum Worlds {
     @MainActor public static let reader = WKContentWorld.world(name: "aegis-reader")
     @MainActor public static let cosmetic = WKContentWorld.world(name: "aegis-cosmetic")
     @MainActor public static let autofill = WKContentWorld.world(name: "aegis-autofill")
+    @MainActor public static let media = WKContentWorld.world(name: "aegis-media")
 }
 
 /// Fingerprinting defenses. These must run in the page world to take effect,
@@ -118,5 +119,55 @@ enum ReaderScript {
 
     static let probe = """
     (() => typeof isProbablyReaderable === 'function' && isProbablyReaderable(document))();
+    """
+}
+
+/// Reports play/pause of any audio or video on the page (media events don't
+/// bubble, so listen in the capture phase). Runs isolated from the page.
+enum MediaScript {
+    static let source = """
+    (() => {
+      const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.aegisMedia;
+      if (!h) return;
+      let last = null, timer = 0;
+      const report = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          const els = [...document.querySelectorAll('video, audio')];
+          const playing = els.find(m => !m.paused && !m.ended && m.readyState > 2 && !m.muted && m.volume > 0);
+          const state = playing ? 'playing' : (els.some(m => !m.ended && m.currentTime > 0) ? 'paused' : 'none');
+          const kind = playing ? (playing.videoWidth > 0 ? 'video' : 'audio') : '';
+          const key = state + kind;
+          if (key === last) return;
+          last = key;
+          try { h.postMessage({ type: 'media', state, kind, top: window === window.top }); } catch (_) {}
+        }, 150);
+      };
+      for (const e of ['play', 'playing', 'pause', 'ended', 'emptied', 'volumechange'])
+        document.addEventListener(e, report, true);
+    })();
+    """
+
+    static let togglePlayback = """
+    (() => {
+      const els = [...document.querySelectorAll('video, audio')];
+      const playing = els.filter(m => !m.paused && !m.ended);
+      if (playing.length) { playing.forEach(m => m.pause()); return 'paused'; }
+      const last = els.find(m => m.currentTime > 0 && !m.ended) || els[0];
+      if (last) { last.play(); return 'playing'; }
+      return 'none';
+    })();
+    """
+
+    static let pictureInPicture = """
+    (() => {
+      const v = [...document.querySelectorAll('video')].find(v => !v.paused) || document.querySelector('video');
+      if (!v) return false;
+      if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {
+        v.webkitSetPresentationMode(v.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+        return true;
+      }
+      return false;
+    })();
     """
 }

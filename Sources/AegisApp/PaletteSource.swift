@@ -26,9 +26,14 @@ final class PaletteSource: PaletteDataSource {
         PaletteCommand(id: "favorite", title: "Add to Favorites", aliases: ["bookmark", "star"], shortcut: "⌘D", icon: "star"),
         PaletteCommand(id: "copyURL", title: "Copy Link", aliases: ["url", "share"], shortcut: "⇧⌘C", icon: "link"),
         PaletteCommand(id: "find", title: "Find on Page", aliases: ["search page"], shortcut: "⌘F", icon: "text.magnifyingglass"),
+        PaletteCommand(id: "library", title: "Downloads and Media", aliases: ["downloads", "files", "library", "images"], shortcut: "⌥⌘J", icon: "tray.and.arrow.down"),
+        PaletteCommand(id: "playPause", title: "Play or Pause Media", aliases: ["music", "video", "pause", "resume"], icon: "playpause"),
+        PaletteCommand(id: "pip", title: "Picture in Picture", aliases: ["pip", "float video"], icon: "pip.enter"),
         PaletteCommand(id: "sidebar", title: "Toggle Sidebar", aliases: ["hide sidebar", "focus"], shortcut: "⌘S", icon: "sidebar.left"),
         PaletteCommand(id: "sleep", title: "Put Background Tabs to Sleep", aliases: ["hibernate", "memory", "free"], shortcut: "⌥⌘H", icon: "moon.zzz"),
         PaletteCommand(id: "newSpace", title: "New Space", aliases: ["profile", "container"], shortcut: "⌥⌘N", icon: "square.stack.3d.up"),
+        PaletteCommand(id: "renameSpace", title: "Rename Space", aliases: ["name space"], icon: "pencil"),
+        PaletteCommand(id: "deleteSpace", title: "Delete Space", aliases: ["remove space"], icon: "trash"),
         PaletteCommand(id: "nextSpace", title: "Next Space", aliases: ["switch space"], shortcut: "⌥⌘]", icon: "arrow.right.square"),
         PaletteCommand(id: "private", title: "New Private Window", aliases: ["incognito"], shortcut: "⇧⌘N", icon: "eye.slash"),
         PaletteCommand(id: "blocking", title: "Toggle Content Blocking", aliases: ["ads", "adblock", "trackers", "shield"], icon: "shield"),
@@ -149,9 +154,14 @@ final class PaletteSource: PaletteDataSource {
             case "copyURL": c.copyURL()
             case "find": c.showFind()
             case "sidebar": c.toggleSidebar()
+            case "library": c.openLibrary()
+            case "playPause": c.toggleMediaAnywhere()
+            case "pip": c.pictureInPictureAnywhere()
             case "sleep": c.hibernateCurrentSpaceBackground()
             case "newSpace": c.newSpace()
             case "nextSpace": c.switchSpace(1)
+            case "renameSpace": c.renameSpace()
+            case "deleteSpace": c.deleteSpace()
             case "private": d?.newPrivateWindow()
             case "blocking": d?.toggleBlocking()
             case "clearData": d?.clearSpaceData()

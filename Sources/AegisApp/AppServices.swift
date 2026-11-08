@@ -58,6 +58,7 @@ final class AppServices {
             }
         }
         Task.detached(priority: .background) { [history] in try? await history?.decayInputHistory() }
+        DownloadCenter.shared.onChange = { [weak self] in self?.controllers.forEach { $0.refreshLibrary() } }
     }
 
     // MARK: Windows

@@ -117,28 +117,70 @@ public final class TabRuntime {
     }
 }
 
-/// Tracks downloads into ~/Downloads, never overwriting.
+/// Tracks downloads into ~/Downloads, never overwriting, and remembers them
+/// across launches for the Library.
 @MainActor
 public final class DownloadCenter: NSObject, WKDownloadDelegate {
     public static let shared = DownloadCenter()
-    public struct Item: Identifiable {
-        public let id = UUID()
+    public struct Item: Identifiable, Codable, Equatable {
+        public var id = UUID()
         public var filename: String
         public var destination: URL?
-        public var progress: Progress?
+        public var sourceURL: URL?
+        public var started = Date()
+        public var totalBytes: Int64 = 0
         public var finished = false
         public var failed = false
+        public var fractionCompleted: Double = 0
+        public var isMedia: Bool {
+            guard let ext = destination?.pathExtension.lowercased() ?? filename.split(separator: ".").last.map({ String($0).lowercased() }) else { return false }
+            return ["png", "jpg", "jpeg", "gif", "webp", "heic", "avif", "svg", "mp4", "mov", "m4v", "webm", "mp3", "m4a", "wav", "aac", "flac"].contains(ext)
+        }
+        public var fileExists: Bool { destination.map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
     }
     public private(set) var items: [Item] = []
     public var onChange: (() -> Void)?
     private var map: [ObjectIdentifier: UUID] = [:]
+    private var progressObservers: [UUID: NSKeyValueObservation] = [:]
+    private let file = AppPaths.support.appending(path: "downloads.json")
+
+    override init() {
+        super.init()
+        if let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode([Item].self, from: data) {
+            // Interrupted downloads from a previous run are failed, not in flight.
+            items = saved.map { var i = $0; if !i.finished { i.failed = true }; return i }
+        }
+    }
+
+    public var active: [Item] { items.filter { !$0.finished && !$0.failed } }
 
     func track(_ download: WKDownload) {
         download.delegate = self
-        let item = Item(filename: download.originalRequest?.url?.lastPathComponent ?? "download", progress: download.progress)
-        items.append(item)
+        var item = Item(filename: download.originalRequest?.url?.lastPathComponent ?? "download")
+        item.sourceURL = download.originalRequest?.url
+        items.insert(item, at: 0)
         map[ObjectIdentifier(download)] = item.id
-        onChange?()
+        let id = item.id
+        progressObservers[id] = download.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
+            let fraction = progress.fractionCompleted, total = progress.totalUnitCount
+            Task { @MainActor in
+                guard let self, let i = self.items.firstIndex(where: { $0.id == id }) else { return }
+                self.items[i].fractionCompleted = fraction
+                if total > 0 { self.items[i].totalBytes = total }
+                self.onChange?()
+            }
+        }
+        changed()
+    }
+
+    public func remove(_ id: UUID) {
+        items.removeAll { $0.id == id }
+        changed()
+    }
+
+    public func clearFinished() {
+        items.removeAll { $0.finished || $0.failed }
+        changed()
     }
 
     public func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
@@ -150,12 +192,18 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
             n += 1
             url = folder.appending(path: ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
         }
-        update(download) { $0.filename = url.lastPathComponent; $0.destination = url }
+        let expected = response.expectedContentLength
+        update(download) { $0.filename = url.lastPathComponent; $0.destination = url; if expected > 0 { $0.totalBytes = expected } }
         return url
     }
 
     public func downloadDidFinish(_ download: WKDownload) {
-        update(download) { $0.finished = true }
+        update(download) { $0.finished = true; $0.fractionCompleted = 1 }
+        if let id = map[ObjectIdentifier(download)] { progressObservers[id] = nil }
+        // Bounce the Downloads stack in the Dock, as Safari does.
+        if let url = items.first(where: { $0.id == map[ObjectIdentifier(download)] })?.destination {
+            DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: url.path)
+        }
     }
 
     public func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
@@ -165,6 +213,15 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
     private func update(_ download: WKDownload, _ change: (inout Item) -> Void) {
         guard let id = map[ObjectIdentifier(download)], let i = items.firstIndex(where: { $0.id == id }) else { return }
         change(&items[i])
+        changed()
+    }
+
+    private func changed() {
+        if items.count > 500 { items.removeLast(items.count - 500) }
+        if let data = try? JSONEncoder().encode(items) {
+            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: file, options: .atomic)
+        }
         onChange?()
     }
 }
