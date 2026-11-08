@@ -34,6 +34,7 @@ final class SettingsModel {
     var archiveHours: Double { didSet { pushArchive() } }
     var sleepMinutes: Double { didSet { services.runtime.hibernation.idleTimeout = sleepMinutes * 60 } }
     var passkeyStatus = "Checking…"
+    var tabsOnTop: Bool { didSet { services.forEachController { $0.tabsOnTop = tabsOnTop } } }
     var resolver: EncryptedDNSProxy.Resolver { didSet { services.setResolver(resolver) } }
 
     init(services: AppServices) {
@@ -46,6 +47,7 @@ final class SettingsModel {
         archiveHours = services.store.currentSpace.archiveAfter / 3600
         sleepMinutes = services.runtime.hibernation.idleTimeout / 60
         resolver = services.dnsProxy.resolver
+        tabsOnTop = UserDefaults.standard.bool(forKey: "tabsOnTop")
         let passkeys = PasskeyAuthorization()
         passkeyStatus = switch passkeys.authorizationState {
         case .unavailableNoEntitlement: "Needs Apple's browser passkey entitlement (not in this build)"
@@ -85,6 +87,10 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Tabs") {
+                Picker("Tab layout", selection: $model.tabsOnTop) {
+                    Text("Sidebar").tag(false); Text("Tabs on top").tag(true)
+                }
+                .pickerStyle(.segmented)
                 Picker("Archive today's tabs after", selection: $model.archiveHours) {
                     Text("12 hours").tag(12.0); Text("1 day").tag(24.0); Text("1 week").tag(168.0); Text("30 days").tag(720.0)
                 }
