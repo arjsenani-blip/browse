@@ -277,13 +277,13 @@ extension EncryptedDNSProxyTests {
     /// per-launch credential (auth required) loads a page, and the upstream
     /// resolution is DoH.
     @Test func webKitUsesProxyCredentialAndDoH() async throws {
-            let proxy = EncryptedDNSProxy(resolver: .quad9)
+        let proxy = EncryptedDNSProxy(resolver: .quad9)
         defer { proxy.stop() }
         try await proxy.start()
         let reports = ReportBox()
         proxy.engine.setEstablishmentReportHandler { reports.append($0) }
         let store = WKWebsiteDataStore.nonPersistent()
-        store.proxyConfigurations = [proxy.proxyConfiguration!]
+        store.proxyConfigurations = [try #require(proxy.proxyConfiguration)]
         let config = WKWebViewConfiguration()
         config.websiteDataStore = store
         let view = WKWebView(frame: .init(x: 0, y: 0, width: 800, height: 600), configuration: config)

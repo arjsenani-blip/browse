@@ -123,6 +123,13 @@ public final class BrowserStore {
         return space
     }
 
+    public func renameSpace(_ id: UUID, name: String, accentHue: Double? = nil) {
+        mutateSpace(id) { space in
+            space.name = name
+            if let accentHue { space.accentHue = accentHue }
+        }
+    }
+
     public func setArchiveInterval(_ seconds: TimeInterval) {
         for i in spaces.indices { spaces[i].archiveAfter = seconds }
     }

@@ -58,6 +58,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    @objc func importBrowserData() {
+        let sources = ImportSources.detect()
+        guard !sources.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No other browsers found"
+            alert.informativeText = "Aegis looks for Arc, Chrome, Brave, Edge, Vivaldi and Safari data on this Mac."
+            alert.runModal()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Import from other browsers"
+        alert.informativeText = "Arc spaces, favorites and pinned tabs come over as spaces. Bookmarks go into an “Imported Bookmarks” space. Nothing loads until you open it."
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        var boxes: [(NSButton, ImportSource)] = []
+        for source in sources {
+            let box = NSButton(checkboxWithTitle: source.status == .needsFullDiskAccess ? "\(source.displayName) (needs Full Disk Access)" : source.displayName, target: nil, action: nil)
+            box.state = source.status == .readable ? .on : .off
+            box.isEnabled = source.status == .readable
+            stack.addArrangedSubview(box)
+            boxes.append((box, source))
+        }
+        let separate = NSButton(checkboxWithTitle: "Give each imported space its own cookies and logins", target: nil, action: nil)
+        separate.state = .on
+        stack.addArrangedSubview(separate)
+        stack.frame = NSRect(x: 0, y: 0, width: 380, height: CGFloat(boxes.count + 1) * 24)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Import")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var plan = ImportPlan()
+        var errors: [String] = []
+        for (box, source) in boxes where box.state == .on {
+            do { plan = plan.merged(with: try source.load(arcOptions: .init())) } catch { errors.append("\(source.displayName): \(error)") }
+        }
+        let summary = services.store.apply(plan, newProfilesPerSpace: separate.state == .on)
+        let done = NSAlert()
+        done.messageText = "Imported \(summary.tabsAdded) tabs into \(summary.touchedSpaceIDs.count) spaces"
+        done.informativeText = (errors + summary.warnings.prefix(5)).joined(separator: "\n")
+        done.runModal()
+    }
+
     @objc func exportPasswords() {
         Task {
             guard let csv = try? await PasswordCSVExporter.exportAll(from: services.passwords, reason: "export your saved passwords") else { return }

@@ -34,6 +34,7 @@ final class SettingsModel {
     var archiveHours: Double { didSet { pushArchive() } }
     var sleepMinutes: Double { didSet { services.runtime.hibernation.idleTimeout = sleepMinutes * 60 } }
     var passkeyStatus = "Checking…"
+    var resolver: EncryptedDNSProxy.Resolver { didSet { services.setResolver(resolver) } }
 
     init(services: AppServices) {
         self.services = services
@@ -44,6 +45,7 @@ final class SettingsModel {
         httpsOnly = p.httpsOnly
         archiveHours = services.store.currentSpace.archiveAfter / 3600
         sleepMinutes = services.runtime.hibernation.idleTimeout / 60
+        resolver = services.dnsProxy.resolver
         let passkeys = PasskeyAuthorization()
         passkeyStatus = switch passkeys.authorizationState {
         case .unavailableNoEntitlement: "Needs Apple's browser passkey entitlement (not in this build)"
@@ -76,6 +78,9 @@ struct SettingsView: View {
                 Toggle("Fingerprint protection", isOn: $model.fingerprint)
                 Toggle("Remove tracking parameters from links", isOn: $model.strip)
                 Toggle("HTTPS only (ask before falling back)", isOn: $model.httpsOnly)
+                Picker("Encrypted DNS", selection: $model.resolver) {
+                    ForEach(EncryptedDNSProxy.Resolver.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                }
                 Text("Aegis sends no telemetry. The only requests it makes on its own are filter-list updates from easylist.to.")
                     .font(.caption).foregroundStyle(.secondary)
             }

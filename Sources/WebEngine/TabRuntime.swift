@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import Network
 import BrowserCore
 import os
 
@@ -20,6 +21,8 @@ public final class TabRuntime {
     public weak var delegate: WebTabDelegate?
     /// Profiles whose data must never touch disk (private windows).
     public var ephemeralProfiles: Set<UUID> = []
+    /// The encrypted-DNS proxy every profile routes through (nil = direct).
+    public var proxyConfiguration: ProxyConfiguration?
 
     private var pressureSource: DispatchSourceMemoryPressure?
     private var timer: Timer?
@@ -31,7 +34,7 @@ public final class TabRuntime {
 
     public func context(for profile: Profile) -> ProfileContext {
         if let c = contexts[profile.id] { return c }
-        let c = ProfileContext(profile: profile, ephemeral: ephemeralProfiles.contains(profile.id), policy: policy, settings: settings)
+        let c = ProfileContext(profile: profile, ephemeral: ephemeralProfiles.contains(profile.id), policy: policy, settings: settings, proxy: proxyConfiguration)
         contexts[profile.id] = c
         return c
     }

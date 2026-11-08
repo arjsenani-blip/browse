@@ -1,5 +1,6 @@
 import Foundation
 import WebKit
+import Network
 import BrowserCore
 
 /// What the privacy layer supplies to every web view. Implemented in the app
@@ -33,11 +34,14 @@ public final class ProfileContext {
     var settings: PrivacySettings
     private var live: [ObjectIdentifier: WeakTab] = [:]
 
-    public init(profile: Profile, ephemeral: Bool = false, policy: ContentPolicy?, settings: PrivacySettings) {
+    public init(profile: Profile, ephemeral: Bool = false, policy: ContentPolicy?, settings: PrivacySettings, proxy: ProxyConfiguration? = nil) {
         self.profile = profile
         self.policy = policy
         self.settings = settings
         dataStore = ephemeral ? .nonPersistent() : WKWebsiteDataStore(forIdentifier: profile.id)
+        // Encrypted DNS: all of this profile's traffic goes through the local
+        // DoH proxy. Must be set before the store's first load.
+        if let proxy { dataStore.proxyConfigurations = [proxy] }
         installScripts()
         reloadRules()
         userContent.add(ScriptRelay(self), contentWorld: Worlds.autofill, name: "aegisAutofill")

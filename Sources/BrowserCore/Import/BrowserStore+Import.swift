@@ -101,7 +101,7 @@ extension BrowserStore {
                 summary.reusedSpaceID = reuse
                 if let existing = spaces.first(where: { $0.id == reuse }),
                    existing.name != space.name || existing.accentHue != space.hue {
-                    summary.pendingRenames.append(SpaceRename(spaceID: reuse, name: space.name, accentHue: space.hue))
+                    renameSpace(reuse, name: space.name, accentHue: space.hue)
                 }
             } else {
                 // addSpace derives a shared profile from the current space.

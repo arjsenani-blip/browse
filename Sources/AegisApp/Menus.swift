@@ -29,6 +29,7 @@ enum Menus {
             item("Close Window", #selector(NSWindow.performClose(_:)), "w", [.command, .shift], target: nil),
             item("Reopen Closed Tab", #selector(AppDelegate.reopenClosedTab), "t", [.command, .shift], target: target),
             .separator(),
+            item("Import from Arc, Chrome or Safari…", #selector(AppDelegate.importBrowserData), "", target: target),
             item("Import Passwords…", #selector(AppDelegate.importPasswords), "", target: target),
             item("Export Passwords…", #selector(AppDelegate.exportPasswords), "", target: target),
         ]))

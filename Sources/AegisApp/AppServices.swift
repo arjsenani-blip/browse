@@ -20,6 +20,7 @@ final class AppServices {
     lazy var credentials = CredentialsCoordinator(store: passwords)
     let blocking = BlockingAdapter()
     var privacy = PrivacySettings()
+    let dnsProxy = EncryptedDNSProxy(resolver: EncryptedDNSProxy.Resolver(rawValue: UserDefaults.standard.string(forKey: "dohResolver") ?? "") ?? .quad9)
     private var controllers: [BrowserWindowController] = []
     private var saveTimer: Timer?
     private let log = Logger(subsystem: "app.aegis", category: "app")
@@ -39,6 +40,12 @@ final class AppServices {
         runtime.policy = blocking
         blocking.onRulesChanged = { [weak self] in self?.runtime.reloadRules() }
         await blocking.start()
+        do {
+            try await dnsProxy.start()
+            runtime.proxyConfiguration = dnsProxy.proxyConfiguration
+        } catch {
+            log.error("DoH proxy failed to start: \(error.localizedDescription, privacy: .public); using system DNS")
+        }
         runtime.settings = privacy
         runtime.delegate = self
         runtime.startHibernation()
@@ -118,6 +125,11 @@ final class AppServices {
         runtime.settings = privacy
         if let data = try? JSONEncoder().encode(CodablePrivacy(privacy)) { UserDefaults.standard.set(data, forKey: "privacy") }
         controllers.forEach { $0.refresh() }
+    }
+
+    func setResolver(_ resolver: EncryptedDNSProxy.Resolver) {
+        dnsProxy.resolver = resolver
+        UserDefaults.standard.set(resolver.rawValue, forKey: "dohResolver")
     }
 
     func updateFilters(force: Bool) {

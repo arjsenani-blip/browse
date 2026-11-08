@@ -403,7 +403,7 @@ enum ImportFixtures {
         #expect(store.spaces.count == 3)
         #expect(summary.reusedSpaceID == defaultID)
         #expect(summary.createdSpaceIDs.count == 2)
-        #expect(summary.pendingRenames.first?.spaceID == defaultID)
+        #expect(store.spaces[0].name == "Personal")  // renamed from the plan (Arc's first space is also "Personal")
         #expect(store.spaces.map(\.name).suffix(2) == ["Work", "Space 3"])
         #expect(store.profiles.count == 1)
         #expect(store.currentSpaceID == defaultID)
@@ -412,7 +412,8 @@ enum ImportFixtures {
         #expect(personal.favorites.compactMap { store.tabs[$0]?.title } == ["Inbox (3)", "Google Calendar"])
         // calendar.google.com/ (favorite) and calendar.google.com (pinned) dedupe.
         #expect(personal.pinned.count == 5)
-        #expect(!personal.pinned.compactMap { store.tabs[$0]?.url?.host() }.contains("calendar.google.com"))
+        let pinnedHosts: [String] = personal.pinned.compactMap { store.tabs[$0]?.url?.host() }
+        #expect(!pinnedHosts.contains("calendar.google.com"))
         #expect(personal.today.compactMap { store.tabs[$0]?.title } == ["Arc - Wikipedia", "B"])
         #expect(personal.selected == nil)
         #expect(summary.duplicatesSkipped == 1)
