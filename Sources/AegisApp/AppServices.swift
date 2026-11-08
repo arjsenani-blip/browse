@@ -84,6 +84,8 @@ final class AppServices {
     }
     var privateProfiles: Set<UUID> = []
 
+    func forEachController(_ body: (BrowserWindowController) -> Void) { controllers.forEach(body) }
+
     func windowClosed(_ c: BrowserWindowController) {
         controllers.removeAll { $0 === c }
         saveSession()

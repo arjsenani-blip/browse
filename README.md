@@ -41,6 +41,7 @@ Measured with the same 5 sites open (`docs/benchmarks.md`):
 | App process memory | ✅ | 40 MB idle; 54–57 MB with 5 sites (budget 150 MB) |
 | Spaces with separate cookies and logins | ✅ | httpbin: a cookie set in one space is absent in another |
 | Two-finger swipe between spaces (interactive, rubber-band, accent cross-fade) | ✅ Built; needs a real trackpad to try | `trackSwipeEvent`, research in `docs/research/07-space-swipe.md` |
+| Vertical sidebar or Tabs on Top (View menu, ⌘K, or Settings) | ✅ | Screenshot |
 | Rename / recolor / delete spaces (right-click the space name, or ⌘K) | ✅ | |
 | Library: downloads and media (⌥⌘J, or the tray button) | ✅ | Real downloads listed; media grid with thumbnails |
 | Now playing: background audio/video mini player with play/pause and PiP | ✅ | Background track detected and controllable |

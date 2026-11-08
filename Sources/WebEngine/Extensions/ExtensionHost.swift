@@ -86,6 +86,7 @@ public final class ExtensionHost: NSObject {
     private var failures: [String: String] = [:]
     private var tabAdapters: [ObjectIdentifier: ExtensionTabAdapter] = [:]
     private var windowAdapters: [ObjectIdentifier: ExtensionWindowAdapter] = [:]
+    var tabSnapshots: [ObjectIdentifier: TabSnapshot] = [:]
     private let log = Logger(subsystem: "app.aegis", category: "extensions")
 
     // MARK: App-supplied callbacks

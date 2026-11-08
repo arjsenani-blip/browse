@@ -29,6 +29,7 @@ final class PaletteSource: PaletteDataSource {
         PaletteCommand(id: "library", title: "Downloads and Media", aliases: ["downloads", "files", "library", "images"], shortcut: "⌥⌘J", icon: "tray.and.arrow.down"),
         PaletteCommand(id: "playPause", title: "Play or Pause Media", aliases: ["music", "video", "pause", "resume"], icon: "playpause"),
         PaletteCommand(id: "pip", title: "Picture in Picture", aliases: ["pip", "float video"], icon: "pip.enter"),
+        PaletteCommand(id: "tabsOnTop", title: "Switch Tab Layout (Sidebar / Top)", aliases: ["horizontal tabs", "vertical tabs", "tab bar"], icon: "rectangle.topthird.inset.filled"),
         PaletteCommand(id: "sidebar", title: "Toggle Sidebar", aliases: ["hide sidebar", "focus"], shortcut: "⌘S", icon: "sidebar.left"),
         PaletteCommand(id: "sleep", title: "Put Background Tabs to Sleep", aliases: ["hibernate", "memory", "free"], shortcut: "⌥⌘H", icon: "moon.zzz"),
         PaletteCommand(id: "newSpace", title: "New Space", aliases: ["profile", "container"], shortcut: "⌥⌘N", icon: "square.stack.3d.up"),
@@ -154,6 +155,7 @@ final class PaletteSource: PaletteDataSource {
             case "copyURL": c.copyURL()
             case "find": c.showFind()
             case "sidebar": c.toggleSidebar()
+            case "tabsOnTop": d?.toggleTabsOnTop()
             case "library": c.openLibrary()
             case "playPause": c.toggleMediaAnywhere()
             case "pip": c.pictureInPictureAnywhere()

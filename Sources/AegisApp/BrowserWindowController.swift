@@ -22,6 +22,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var shownTab: TabID?
     private var refreshScheduled = false
     private var findBar: FindBar?
+    private let topBar = TopTabBar()
+    private var sideItem: NSSplitViewItem!
+    private var cardTopToContainer: NSLayoutConstraint!
+    private var cardTopToBar: NSLayoutConstraint!
+    /// Vertical sidebar (default) or tabs on top.
+    var tabsOnTop: Bool {
+        get { UserDefaults.standard.bool(forKey: "tabsOnTop") }
+        set { UserDefaults.standard.set(newValue, forKey: "tabsOnTop"); applyTabLayout(animated: true) }
+    }
 
     enum PaletteMode { case newTab, navigate, command }
 
@@ -43,6 +52,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
         sidebar.delegate = self
         let sideItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+        self.sideItem = sideItem
         sideItem.minimumThickness = Tokens.Size.sidebarMin
         sideItem.maximumThickness = Tokens.Size.sidebarMax
         sideItem.canCollapse = true
@@ -52,13 +62,21 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let container = NSView()
         card.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(card)
+        topBar.translatesAutoresizingMaskIntoConstraints = false
+        topBar.delegate = self
+        container.addSubview(topBar)
         let inset = Tokens.Space.cardInset
         NSLayoutConstraint.activate([
             card.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 0),
             card.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -inset),
-            card.topAnchor.constraint(equalTo: container.topAnchor, constant: inset),
+            topBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            topBar.topAnchor.constraint(equalTo: container.topAnchor),
+            topBar.heightAnchor.constraint(equalToConstant: 40),
             card.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -inset),
         ])
+        cardTopToContainer = card.topAnchor.constraint(equalTo: container.topAnchor, constant: inset)
+        cardTopToBar = card.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 0)
         contentVC.view = container
         let contentItem = NSSplitViewItem(viewController: contentVC)
         contentItem.minimumThickness = 400
@@ -93,6 +111,20 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
 
         observeStore()
+        applyTabLayout(animated: false)
+        refresh()
+    }
+
+    private func applyTabLayout(animated: Bool) {
+        let top = tabsOnTop
+        cardTopToContainer.isActive = !top
+        cardTopToBar.isActive = top
+        topBar.isHidden = !top
+        if animated { sideItem.animator().isCollapsed = top } else { sideItem.isCollapsed = top }
+        // Inset the card on the left too when there's no sidebar beside it.
+        card.superview.flatMap { container in
+            container.constraints.first { $0.firstItem === card && $0.firstAttribute == .leading }
+        }?.constant = top ? Tokens.Space.cardInset : 0
         refresh()
     }
 
@@ -161,6 +193,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             if !live.isLoading && live.progress >= 1 { card.dismissSnapshot() }
         }
         sidebar.apply(s)
+        if tabsOnTop { topBar.apply(s) }
         showSelected()
         window?.title = store.selectedTab?.displayTitle ?? "Aegis"
     }
@@ -283,6 +316,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func toggleSidebar() {
+        if tabsOnTop { return }
         split.toggleSidebar(nil)
     }
 

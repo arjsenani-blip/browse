@@ -117,6 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func commandPalette() { front?.openPalette(.command) }
     @objc func toggleSidebar() { front?.toggleSidebar() }
     @objc func showLibrary() { front?.openLibrary() }
+    @objc func toggleTabsOnTop() {
+        let on = !(front?.tabsOnTop ?? false)
+        services.forEachController { $0.tabsOnTop = on }
+    }
     @objc func toggleReader() { front?.toggleReader() }
     @objc func cycleReaderTheme() { front?.cycleReaderTheme() }
     @objc func reload() { front?.sidebarReload() }
@@ -185,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(toggleFingerprinting): item.state = services.privacy.fingerprintProtection ? .on : .off
         case #selector(toggleStripping): item.state = services.privacy.stripTrackingParameters ? .on : .off
         case #selector(toggleHTTPSOnly): item.state = services.privacy.httpsOnly ? .on : .off
+        case #selector(toggleTabsOnTop): item.state = front?.tabsOnTop == true ? .on : .off
         case #selector(togglePin):
             item.title = front?.store.selectedTab?.tier == .pinned ? "Unpin Tab" : "Pin Tab"
             return front?.store.selectedTab != nil

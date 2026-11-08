@@ -4,6 +4,7 @@ import Security
 import Testing
 import WebKit
 @testable import WebEngine
+import BrowserCore
 
 // MARK: - Fixtures
 
@@ -425,6 +426,24 @@ enum Fixture {
     }
 }
 
+@Suite @MainActor struct WebTabBridgeTests {
+    @Test func adapterWrapsWebTabAndDiffsChanges() throws {
+        let root = try Fixture.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let host = ExtensionHost(root: root, persistent: false)
+        let context = ProfileContext(profile: Profile(name: "T"), ephemeral: true, policy: nil, settings: PrivacySettings())
+        let tab = WebTab(id: TabID(), context: context)
+        let view = tab.wake(url: nil, interactionState: nil)
+        let adapter = host.adapter(for: tab, isSelected: { true }, window: { nil }, activate: {}, close: {})
+        #expect(host.adapter(for: tab, isSelected: { false }, window: { nil }, activate: {}, close: {}) === adapter)
+        #expect(adapter.webView() === view)
+        #expect(adapter.isPrivate())
+        host.webTabDidChange(tab) // first call only records a snapshot
+        host.webTabDidClose(tab)
+        #expect(host.existingTabAdapter(for: tab) == nil)
+    }
+}
+
 // MARK: - Real extensions (network; opt-in with AEGIS_NETWORK_TESTS=1)
 
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["AEGIS_NETWORK_TESTS"] != nil))
@@ -453,6 +472,22 @@ enum Fixture {
         let requested = Set(ext.manifest["permissions"] as? [String] ?? [])
         let known = Set(ExtensionCompatibility.supportedPermissions)
         print("[real] \(name) manifest permissions WebKit doesn't know:", requested.subtracting(known).sorted())
+        if id == "ddkjiahejlhfcafbddmgiahcphecmpfh" {
+            // Does the DNR ruleset actually block in a web view wired to the controller?
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = .nonPersistent()
+            host.configure(config)
+            let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), configuration: config)
+            let tab = ExtensionTabAdapter(webView: { view }, isSelected: { true }, window: { nil }, activate: {}, close: {})
+            host.didOpen(tab: tab)
+            view.load(URLRequest(url: URL(string: "https://example.com/")!))
+            for _ in 0..<40 where view.isLoading || view.url == nil { try await Task.sleep(for: .milliseconds(250)) }
+            try await Task.sleep(for: .seconds(2))
+            let js = "try { await fetch('https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js', {mode: 'no-cors'}); return 'loaded'; } catch (e) { return 'blocked: ' + e; }"
+            let ad = try await view.callAsyncJavaScript(js, contentWorld: .page) as? String
+            let ok = try await view.callAsyncJavaScript(js.replacingOccurrences(of: "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js", with: "https://www.iana.org/favicon.ico"), contentWorld: .page) as? String
+            print("[real] uBOL DNR: ad request ->", ad ?? "nil", "| control request ->", ok ?? "nil")
+        }
         print("[real] \(name) hasBackground:", ext.hasBackgroundContent, "hasInjected:", ext.hasInjectedContent,
               "DNR rules:", ext.hasContentModificationRules, "options:", ext.hasOptionsPage)
     }
