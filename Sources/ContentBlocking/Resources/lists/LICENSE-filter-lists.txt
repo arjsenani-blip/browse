@@ -1,0 +1,19 @@
+Filter list licensing
+=====================
+
+These files are data shipped inside Aegis and parsed at runtime. They are not
+linked into, or compiled as part of, the Aegis program code.
+
+easylist.txt, easyprivacy.txt
+  Source:  https://easylist.to/  (fetched by scripts/update-filters.sh)
+  Authors: The EasyList authors (https://easylist.to/pages/about.html)
+  License: Dual-licensed under the GNU General Public License v3 (or later)
+           and the Creative Commons Attribution-ShareAlike 3.0 Unported license.
+           https://easylist.to/pages/licence.html
+           https://www.gnu.org/licenses/gpl-3.0.html
+           https://creativecommons.org/licenses/by-sa/3.0/
+  The files are redistributed unmodified. The in-app updater replaces them
+  with fresh copies from easylist.to (Application Support/Aegis/Filters).
+
+starter.txt
+  Written for Aegis. Same license as the Aegis source code.

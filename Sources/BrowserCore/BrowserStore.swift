@@ -1,0 +1,164 @@
+import Foundation
+import Observation
+
+/// The single source of truth for spaces and tabs. The sidebar applies diffs
+/// from it; the web layer reports activity into it.
+@MainActor
+@Observable
+public final class BrowserStore {
+    public private(set) var profiles: [Profile]
+    public private(set) var spaces: [Space]
+    public private(set) var tabs: [TabID: TabRecord]
+    public private(set) var archive: [ArchivedTab]
+    public var currentSpaceID: UUID
+    /// Recently closed, newest last, for ⇧⌘T.
+    public private(set) var closed: [TabRecord] = []
+
+    public init(snapshot: SessionSnapshot? = nil) {
+        if let s = snapshot, !s.spaces.isEmpty {
+            profiles = s.profiles
+            spaces = s.spaces
+            tabs = Dictionary(uniqueKeysWithValues: s.tabs.map { ($0.id, $0) })
+            archive = s.archive
+            currentSpaceID = s.spaces.contains { $0.id == s.currentSpaceID } ? s.currentSpaceID : s.spaces[0].id
+            // Every restored tab starts asleep; it wakes on selection.
+            for id in tabs.keys { tabs[id]?.isSleeping = true; tabs[id]?.activity = [] }
+        } else {
+            let personal = Profile(name: "Personal")
+            let space = Space(name: "Personal", accentHue: 0.48, profileID: personal.id)
+            profiles = [personal]
+            spaces = [space]
+            tabs = [:]
+            archive = []
+            currentSpaceID = space.id
+        }
+    }
+
+    // MARK: Queries
+
+    public var currentSpace: Space { spaces.first { $0.id == currentSpaceID } ?? spaces[0] }
+    public var selectedTab: TabRecord? { currentSpace.selected.flatMap { tabs[$0] } }
+
+    public func profile(for space: Space) -> Profile {
+        profiles.first { $0.id == space.profileID } ?? profiles[0]
+    }
+
+    public func space(containing id: TabID) -> Space? {
+        spaces.first { $0.allTabs.contains(id) }
+    }
+
+    // MARK: Tabs
+
+    @discardableResult
+    public func openTab(_ url: URL?, tier: TabTier = .today, select: Bool = true, in spaceID: UUID? = nil) -> TabID {
+        let tab = TabRecord(url: url, tier: tier)
+        tabs[tab.id] = tab
+        mutateSpace(spaceID ?? currentSpaceID) { space in
+            space.insert(tab.id, tier: tier)
+            if select { space.selected = tab.id }
+        }
+        return tab.id
+    }
+
+    public func select(_ id: TabID) {
+        guard let owner = space(containing: id) else { return }
+        currentSpaceID = owner.id
+        mutateSpace(owner.id) { $0.selected = id }
+        tabs[id]?.lastActive = Date()
+    }
+
+    public func close(_ id: TabID) {
+        guard let owner = space(containing: id), let tab = tabs[id] else { return }
+        let ordered = owner.allTabs
+        let index = ordered.firstIndex(of: id) ?? 0
+        mutateSpace(owner.id) { space in
+            space.remove(id)
+            if space.selected == id {
+                let rest = space.allTabs
+                space.selected = rest.isEmpty ? nil : rest[min(index, rest.count - 1)]
+            }
+        }
+        tabs[id] = nil
+        closed.append(tab)
+        if closed.count > 50 { closed.removeFirst() }
+    }
+
+    @discardableResult
+    public func reopenClosed() -> TabID? {
+        guard var tab = closed.popLast() else { return nil }
+        tab.isSleeping = true
+        tab.lastActive = Date()
+        tabs[tab.id] = tab
+        mutateSpace(currentSpaceID) { space in
+            space.insert(tab.id, tier: tab.tier)
+            space.selected = tab.id
+        }
+        return tab.id
+    }
+
+    public func move(_ id: TabID, to tier: TabTier, at index: Int? = nil) {
+        guard let owner = space(containing: id) else { return }
+        tabs[id]?.tier = tier
+        mutateSpace(owner.id) { $0.insert(id, tier: tier, at: index) }
+    }
+
+    public func update(_ id: TabID, _ change: (inout TabRecord) -> Void) {
+        guard var tab = tabs[id] else { return }
+        change(&tab)
+        if tab != tabs[id] { tabs[id] = tab }
+    }
+
+    // MARK: Spaces
+
+    @discardableResult
+    public func addSpace(name: String, accentHue: Double, newProfile: Bool) -> Space {
+        var profileID = currentSpace.profileID
+        if newProfile {
+            let profile = Profile(name: name)
+            profiles.append(profile)
+            profileID = profile.id
+        }
+        let space = Space(name: name, accentHue: accentHue, profileID: profileID)
+        spaces.append(space)
+        return space
+    }
+
+    public func setArchiveInterval(_ seconds: TimeInterval) {
+        for i in spaces.indices { spaces[i].archiveAfter = seconds }
+    }
+
+    public func switchSpace(by delta: Int) {
+        guard let i = spaces.firstIndex(where: { $0.id == currentSpaceID }) else { return }
+        currentSpaceID = spaces[(i + delta + spaces.count) % spaces.count].id
+    }
+
+    // MARK: Lifecycle
+
+    /// Applies the archive policy across all spaces. Returns archived IDs.
+    @discardableResult
+    public func runArchive(now: Date = Date()) -> [TabID] {
+        var archivedIDs: [TabID] = []
+        for space in spaces {
+            for id in ArchivePolicy.tabsToArchive(in: space, tabs: tabs, now: now) {
+                guard let tab = tabs[id] else { continue }
+                archive.append(ArchivedTab(id: id, url: tab.url, title: tab.displayTitle, spaceID: space.id, archived: now))
+                mutateSpace(space.id) { $0.remove(id) }
+                tabs[id] = nil
+                archivedIDs.append(id)
+            }
+        }
+        if archive.count > 2000 { archive.removeFirst(archive.count - 2000) }
+        return archivedIDs
+    }
+
+    public func snapshot() -> SessionSnapshot {
+        var saved = Array(tabs.values)
+        for i in saved.indices { saved[i].activity = [] }
+        return SessionSnapshot(profiles: profiles, spaces: spaces, tabs: saved, archive: archive, currentSpaceID: currentSpaceID)
+    }
+
+    private func mutateSpace(_ id: UUID, _ change: (inout Space) -> Void) {
+        guard let i = spaces.firstIndex(where: { $0.id == id }) else { return }
+        change(&spaces[i])
+    }
+}

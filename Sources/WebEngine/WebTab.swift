@@ -1,0 +1,277 @@
+import AppKit
+import WebKit
+import BrowserCore
+
+@MainActor
+public protocol WebTabDelegate: AnyObject {
+    func webTabDidChange(_ tab: WebTab)
+    func webTab(_ tab: WebTab, didCommit url: URL, title: String?, typed: Bool)
+    func webTab(_ tab: WebTab, openInNewTab request: URLRequest, background: Bool) -> WKWebView?
+    func webTabDidRequestClose(_ tab: WebTab)
+    func webTab(_ tab: WebTab, autofillMessage body: [String: Any])
+}
+
+/// The live half of a tab: a WKWebView that can be put to sleep and woken.
+/// The record half (URL, title, interaction state) lives in BrowserStore.
+@MainActor
+public final class WebTab: NSObject {
+    public let id: TabID
+    public let context: ProfileContext
+    public private(set) var webView: WKWebView?
+    public weak var delegate: WebTabDelegate?
+
+    public private(set) var url: URL?
+    public private(set) var title = ""
+    public private(set) var progress: Double = 0
+    public private(set) var isLoading = false
+    public private(set) var canGoBack = false
+    public private(set) var canGoForward = false
+    public private(set) var isSecure = false
+    public private(set) var isReaderable = false
+    public private(set) var activity: TabActivity = []
+    /// Snapshot shown while a sleeping tab wakes.
+    public private(set) var snapshot: NSImage?
+
+    private var observations: [NSKeyValueObservation] = []
+    private var pendingTyped = false
+
+    public init(id: TabID, context: ProfileContext) {
+        self.id = id
+        self.context = context
+    }
+
+    public var isAwake: Bool { webView != nil }
+
+    /// Creates the web view, restoring history if we have it. `existing` adopts
+    /// a view WebKit created for a window.open/target=_blank request.
+    @discardableResult
+    public func wake(url: URL?, interactionState: Data?, existing: WKWebView? = nil) -> WKWebView {
+        if let webView { return webView }
+        let view = existing ?? WKWebView(frame: .zero, configuration: context.makeConfiguration())
+        view.navigationDelegate = self
+        view.uiDelegate = self
+        view.allowsBackForwardNavigationGestures = true
+        view.allowsMagnification = true
+        #if DEBUG
+        view.isInspectable = true
+        #endif
+        context.register(self, for: view)
+        webView = view
+        observe(view)
+        if existing == nil {
+            if let interactionState {
+                view.interactionState = interactionState as NSData
+            } else if let url {
+                view.load(URLRequest(url: url))
+            }
+        }
+        return view
+    }
+
+    /// Tears down the web view so its WebContent process can exit.
+    /// Returns the interaction state to persist.
+    @discardableResult
+    public func sleep() async -> Data? {
+        guard let view = webView else { return nil }
+        let config = WKSnapshotConfiguration()
+        config.afterScreenUpdates = false
+        snapshot = try? await view.takeSnapshot(configuration: config)
+        let state = view.interactionState as? Data
+        observations.removeAll()
+        context.unregister(view)
+        view.stopLoading()
+        view.navigationDelegate = nil
+        view.uiDelegate = nil
+        view.removeFromSuperview()
+        webView = nil
+        activity = []
+        isLoading = false
+        delegate?.webTabDidChange(self)
+        return state
+    }
+
+    public var interactionState: Data? { webView?.interactionState as? Data }
+
+    public func load(_ url: URL, typed: Bool = false) {
+        pendingTyped = typed
+        let target = context.settings.stripTrackingParameters ? (context.policy?.strippedURL(url) ?? url) : url
+        (webView ?? wake(url: nil, interactionState: nil)).load(URLRequest(url: target))
+    }
+
+    public func goBack() { webView?.goBack() }
+    public func goForward() { webView?.goForward() }
+    public func reload() { webView?.reload() }
+    public func stop() { webView?.stopLoading() }
+
+    /// Runs the reader extraction in the isolated reader world.
+    public func extractArticle() async -> ReaderArticle? {
+        guard let view = webView else { return nil }
+        let result = try? await view.evaluateJavaScript(ReaderScript.extract, in: nil, contentWorld: Worlds.reader)
+        guard let dict = result as? [String: Any], let content = dict["content"] as? String else { return nil }
+        return ReaderArticle(title: dict["title"] as? String ?? title, byline: dict["byline"] as? String ?? "", site: dict["site"] as? String ?? "", html: content, url: url)
+    }
+
+    public func fillCredentials(username: String, password: String) {
+        guard let view = webView,
+              let u = try? JSONEncoder().encode(username), let p = try? JSONEncoder().encode(password),
+              let us = String(data: u, encoding: .utf8), let ps = String(data: p, encoding: .utf8) else { return }
+        view.evaluateJavaScript("window.__aegisFill && window.__aegisFill(\(us), \(ps));", in: nil, in: Worlds.autofill)
+    }
+
+    // MARK: Observation
+
+    private func observe(_ view: WKWebView) {
+        observations = [
+            view.observe(\.title) { [weak self] v, _ in MainActor.assumeIsolated { self?.title = v.title ?? ""; self?.changed() } },
+            view.observe(\.url) { [weak self] v, _ in MainActor.assumeIsolated { self?.url = v.url; self?.changed() } },
+            view.observe(\.estimatedProgress) { [weak self] v, _ in MainActor.assumeIsolated { self?.progress = v.estimatedProgress; self?.changed() } },
+            view.observe(\.isLoading) { [weak self] v, _ in MainActor.assumeIsolated { self?.isLoading = v.isLoading; self?.changed() } },
+            view.observe(\.canGoBack) { [weak self] v, _ in MainActor.assumeIsolated { self?.canGoBack = v.canGoBack; self?.changed() } },
+            view.observe(\.canGoForward) { [weak self] v, _ in MainActor.assumeIsolated { self?.canGoForward = v.canGoForward; self?.changed() } },
+            view.observe(\.hasOnlySecureContent) { [weak self] v, _ in MainActor.assumeIsolated { self?.isSecure = v.hasOnlySecureContent; self?.changed() } },
+            view.observe(\.cameraCaptureState) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshActivity() } },
+            view.observe(\.microphoneCaptureState) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshActivity() } },
+        ]
+        url = view.url
+        title = view.title ?? ""
+    }
+
+    private func refreshActivity() {
+        guard let view = webView else { return }
+        var a = activity.subtracting(.capturing)
+        if view.cameraCaptureState != .none || view.microphoneCaptureState != .none { a.insert(.capturing) }
+        activity = a
+        changed()
+    }
+
+    /// Asks WebKit whether media is playing; called before hibernation decisions.
+    public func refreshMediaState() async {
+        guard let view = webView else { return }
+        let state = await view.requestMediaPlaybackState()
+        if state == .playing { activity.insert(.playingMedia) } else { activity.remove(.playingMedia) }
+    }
+
+    func setFormDirty(_ dirty: Bool) {
+        if dirty { activity.insert(.unsavedForm) } else { activity.remove(.unsavedForm) }
+    }
+
+    private func changed() { delegate?.webTabDidChange(self) }
+
+    private func probeReader() {
+        guard let view = webView else { return }
+        view.evaluateJavaScript(ReaderScript.probe, in: nil, in: Worlds.reader) { [weak self] result in
+            MainActor.assumeIsolated {
+                if case .success(let value) = result { self?.isReaderable = (value as? Bool) ?? false }
+                self?.changed()
+            }
+        }
+    }
+
+    private func injectCosmetics(host: String) {
+        guard context.settings.blockContent, let source = context.policy?.cosmeticScript(forHost: host) else { return }
+        webView?.evaluateJavaScript(source, in: nil, in: Worlds.cosmetic)
+    }
+}
+
+public struct ReaderArticle: Sendable {
+    public let title: String
+    public let byline: String
+    public let site: String
+    public let html: String
+    public let url: URL?
+}
+
+// MARK: - Navigation
+
+extension WebTab: WKNavigationDelegate {
+    public func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, preferences: WKWebpagePreferences) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
+        let modifiers = action.modifierFlags
+        if action.navigationType == .linkActivated, modifiers.contains(.command) {
+            _ = delegate?.webTab(self, openInNewTab: action.request, background: !modifiers.contains(.shift))
+            return (.cancel, preferences)
+        }
+        // Strip tracking parameters from top-level navigations by re-issuing the clean URL.
+        if action.targetFrame?.isMainFrame == true, context.settings.stripTrackingParameters,
+           let url = action.request.url, let clean = context.policy?.strippedURL(url) {
+            webView.load(URLRequest(url: clean))
+            return (.cancel, preferences)
+        }
+        if action.shouldPerformDownload { return (.download, preferences) }
+        return (.allow, preferences)
+    }
+
+    public func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        response.canShowMIMEType ? .allow : .download
+    }
+
+    public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        isReaderable = false
+        changed()
+    }
+
+    public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if let host = webView.url?.host() { injectCosmetics(host: host) }
+        if let url = webView.url { delegate?.webTab(self, didCommit: url, title: webView.title, typed: pendingTyped) }
+        pendingTyped = false
+    }
+
+    public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let url = webView.url { delegate?.webTab(self, didCommit: url, title: webView.title, typed: false) }
+        probeReader()
+    }
+
+    public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // Crashed or killed under pressure: reload lazily when shown.
+        webView.reload()
+    }
+
+    public func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        DownloadCenter.shared.track(download)
+    }
+
+    public func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        DownloadCenter.shared.track(download)
+    }
+}
+
+// MARK: - UI
+
+extension WebTab: WKUIDelegate {
+    public func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        delegate?.webTab(self, openInNewTab: action.request, background: false)
+    }
+
+    public func webViewDidClose(_ webView: WKWebView) {
+        delegate?.webTabDidRequestClose(self)
+    }
+
+    public func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
+        let alert = NSAlert()
+        alert.messageText = frame.securityOrigin.host
+        alert.informativeText = message
+        alert.runModal()
+    }
+
+    public func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = frame.securityOrigin.host
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    public func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = parameters.allowsDirectories
+        return panel.runModal() == .OK ? panel.urls : nil
+    }
+}
+
+extension WebTab {
+    func receiveScriptMessage(_ body: [String: Any]) {
+        if body["type"] as? String == "formDirty" { setFormDirty(body["dirty"] as? Bool ?? false) }
+        delegate?.webTab(self, autofillMessage: body)
+    }
+}

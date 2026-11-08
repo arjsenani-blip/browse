@@ -1,0 +1,230 @@
+import AppKit
+import WebKit
+import os
+import BrowserCore
+import WebEngine
+import ChromeUI
+import Persistence
+import Search
+import Credentials
+
+/// Process-wide services shared by every window.
+@MainActor
+final class AppServices {
+    let store: BrowserStore
+    let runtime: TabRuntime
+    let sessionStore = SessionStore(directory: AppPaths.support)
+    let history: HistoryStore?
+    let engine: PaletteEngine
+    let passwords = PasswordStore()
+    lazy var credentials = CredentialsCoordinator(store: passwords)
+    let blocking = BlockingAdapter()
+    var privacy = PrivacySettings()
+    private var controllers: [BrowserWindowController] = []
+    private var saveTimer: Timer?
+    private let log = Logger(subsystem: "app.aegis", category: "app")
+
+    init() {
+        try? FileManager.default.createDirectory(at: AppPaths.support, withIntermediateDirectories: true)
+        store = BrowserStore(snapshot: sessionStore.load())
+        runtime = TabRuntime(store: store)
+        history = try? HistoryStore(url: AppPaths.support.appending(path: "history.sqlite"))
+        engine = PaletteEngine(history: history)
+        if let saved = UserDefaults.standard.data(forKey: "privacy"), let p = try? JSONDecoder().decode(CodablePrivacy.self, from: saved) {
+            privacy = p.settings
+        }
+    }
+
+    func start() {
+        runtime.policy = blocking
+        runtime.settings = privacy
+        runtime.delegate = self
+        runtime.startHibernation()
+        store.runArchive()
+        blocking.onRulesChanged = { [weak self] in self?.runtime.reloadRules() }
+        blocking.start()
+        Task { try? await engine.refreshHistoryCache() }
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.saveSession()
+                self?.store.runArchive()
+            }
+        }
+        Task.detached(priority: .background) { [history] in try? await history?.decayInputHistory() }
+    }
+
+    // MARK: Windows
+
+    var frontController: BrowserWindowController? {
+        controllers.first { $0.window?.isKeyWindow == true } ?? controllers.first { $0.window?.isMainWindow == true } ?? controllers.last
+    }
+
+    func newWindow() {
+        let c = BrowserWindowController(app: self)
+        controllers.append(c)
+        c.showWindow(nil)
+        if store.currentSpace.allTabs.isEmpty { c.openPalette(.newTab) }
+    }
+
+    func newPrivateWindow() {
+        // A private window is a fresh, non-persistent space; it is never saved.
+        let space = store.addSpace(name: "Private", accentHue: 0.75, newProfile: true)
+        privateProfiles.insert(space.profileID)
+        runtime.ephemeralProfiles.insert(space.profileID)
+        store.currentSpaceID = space.id
+        newWindow()
+    }
+    var privateProfiles: Set<UUID> = []
+
+    func windowClosed(_ c: BrowserWindowController) {
+        controllers.removeAll { $0 === c }
+        saveSession()
+    }
+
+    func openExternal(_ url: URL) {
+        if controllers.isEmpty { newWindow() }
+        frontController?.navigate(to: url, newTab: true, typed: false)
+        NSApp.activate()
+    }
+
+    func move(_ id: TabID, toSpace spaceID: UUID) {
+        guard let tab = store.tabs[id] else { return }
+        // Moving across profiles means a different data store: reopen fresh.
+        frontController?.closeTab(id)
+        let newID = store.openTab(tab.url, select: false, in: spaceID)
+        _ = newID
+    }
+
+    // MARK: Session
+
+    func saveSession() {
+        runtime.captureStates()
+        var snap = store.snapshot()
+        // Private spaces are never written to disk.
+        let privateSpaces = Set(snap.spaces.filter { privateProfiles.contains($0.profileID) }.map(\.id))
+        if !privateSpaces.isEmpty {
+            let privateTabs = Set(snap.spaces.filter { privateSpaces.contains($0.id) }.flatMap(\.allTabs))
+            snap.spaces.removeAll { privateSpaces.contains($0.id) }
+            snap.tabs.removeAll { privateTabs.contains($0.id) }
+            snap.profiles.removeAll { privateProfiles.contains($0.id) }
+            if privateSpaces.contains(snap.currentSpaceID), let first = snap.spaces.first { snap.currentSpaceID = first.id }
+        }
+        do { try sessionStore.save(snap) } catch { log.error("session save failed: \(error.localizedDescription, privacy: .public)") }
+    }
+
+    // MARK: Privacy
+
+    func applyPrivacy() {
+        runtime.settings = privacy
+        if let data = try? JSONEncoder().encode(CodablePrivacy(privacy)) { UserDefaults.standard.set(data, forKey: "privacy") }
+        controllers.forEach { $0.refresh() }
+    }
+
+    func updateFilters(force: Bool) {
+        blocking.update(force: force) { [weak self] message in
+            Toast.show(message, in: self?.frontController?.window)
+        }
+    }
+
+    func clearHistory() {
+        Task {
+            try? await history?.clear(since: .distantPast)
+            try? await engine.refreshHistoryCache()
+        }
+    }
+
+    func showSettings() {
+        SettingsWindow.shared.show(services: self)
+    }
+
+    // MARK: Palette
+
+    func paletteSource(for controller: BrowserWindowController, mode: BrowserWindowController.PaletteMode) -> PaletteSource {
+        PaletteSource(services: self, controller: controller, mode: mode)
+    }
+
+    func isPrivate(_ tabID: TabID) -> Bool {
+        guard let space = store.space(containing: tabID) else { return false }
+        return privateProfiles.contains(space.profileID)
+    }
+}
+
+// MARK: - Web tab events
+
+extension AppServices: WebTabDelegate {
+    func webTabDidChange(_ tab: WebTab) {
+        if let url = tab.url {
+            store.update(tab.id) { record in
+                record.url = url
+                if !tab.title.isEmpty { record.title = tab.title }
+                record.activity = tab.activity
+            }
+        }
+        for c in controllers where c.store.currentSpace.selected == tab.id { c.scheduleRefresh() }
+    }
+
+    func webTab(_ tab: WebTab, didCommit url: URL, title: String?, typed: Bool) {
+        guard !isPrivate(tab.id), let history, url.scheme == "http" || url.scheme == "https" else { return }
+        Task.detached(priority: .utility) {
+            try? await history.recordVisit(url: url, title: title, kind: typed ? .typed : .link, at: Date())
+        }
+    }
+
+    func webTab(_ tab: WebTab, openInNewTab request: URLRequest, background: Bool) -> WKWebView? {
+        guard let space = store.space(containing: tab.id) else { return nil }
+        let id = store.openTab(request.url, select: !background, in: space.id)
+        if background {
+            // Created lazily on first show; the record holds the URL.
+            return nil
+        }
+        // window.open / target=_blank: WebKit needs a view built from its configuration.
+        let config = tab.webView?.configuration ?? WKWebViewConfiguration()
+        return runtime.adopt(id, configuration: config)
+    }
+
+    func webTabDidRequestClose(_ tab: WebTab) {
+        frontController?.closeTab(tab.id)
+    }
+
+    func webTab(_ tab: WebTab, autofillMessage body: [String: Any]) {
+        guard let type = body["type"] as? String, let host = body["host"] as? String else { return }
+        // Only trust messages whose host matches the tab's top-level page.
+        guard host == tab.url?.host() else { return }
+        switch type {
+        case "formsFound":
+            Task {
+                let suggestions = await credentials.didFindForms(host: host)
+                guard let first = suggestions.first else { return }
+                CredentialBanner.offerFill(suggestion: first, count: suggestions.count, in: frontController?.window) { [weak self] in
+                    guard let self else { return }
+                    Task {
+                        guard let values = await self.credentials.fillValues(for: first) else { return }
+                        tab.fillCredentials(username: values.username, password: values.password)
+                    }
+                }
+            }
+        case "submitted":
+            guard !isPrivate(tab.id), let username = body["username"] as? String, let password = body["password"] as? String else { return }
+            Task {
+                let decision = await credentials.didSubmit(host: host, username: username, password: password)
+                CredentialBanner.offerSave(decision, in: frontController?.window, credentials: credentials, password: password)
+            }
+        default: break
+        }
+    }
+}
+
+/// PrivacySettings is a WebEngine type; persist it without making it Codable there.
+struct CodablePrivacy: Codable {
+    var blockContent, fingerprintProtection, httpsOnly, stripTrackingParameters: Bool
+    init(_ s: PrivacySettings) {
+        blockContent = s.blockContent; fingerprintProtection = s.fingerprintProtection
+        httpsOnly = s.httpsOnly; stripTrackingParameters = s.stripTrackingParameters
+    }
+    var settings: PrivacySettings {
+        var s = PrivacySettings()
+        s.blockContent = blockContent; s.fingerprintProtection = fingerprintProtection
+        s.httpsOnly = httpsOnly; s.stripTrackingParameters = stripTrackingParameters
+        return s
+    }
+}
