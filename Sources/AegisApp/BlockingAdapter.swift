@@ -3,6 +3,7 @@ import WebKit
 import os
 import ContentBlocking
 import WebEngine
+import BrowserCore
 
 /// Bridges ContentBlocking into the web layer's ContentPolicy: converts the
 /// active filter lists off the main thread, compiles them (cached by hash),
@@ -19,6 +20,21 @@ final class BlockingAdapter: ContentPolicy {
 
     private static let idsKey = "blockingRuleListIDs"
     private static let countKey = "blockingRuleCount"
+    private static let sigKey = "blockingInputSignature"
+    private static var cosmeticURL: URL {
+        AppPaths.support.appending(path: "RuleLists/cosmetic.json")
+    }
+
+    /// Paths, sizes and dates of the active list files: if unchanged since the
+    /// last compile, the cached rule lists and cosmetic index are current.
+    private func inputSignature() -> String {
+        manager.activeListURLs().map { url in
+            let a = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let size = (a?[.size] as? NSNumber)?.intValue ?? 0
+            let date = (a?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            return "\(url.path)|\(size)|\(Int(date))"
+        }.joined(separator: ";") + "|v1"
+    }
 
     /// Loads the lists compiled on a previous launch by identifier (a few ms),
     /// so pages restored at launch are blocked from their first request.
@@ -36,6 +52,14 @@ final class BlockingAdapter: ContentPolicy {
                 ruleCount = UserDefaults.standard.integer(forKey: Self.countKey)
                 log.info("blocking ready from cache: \(lists.count) lists")
             }
+        }
+        // Skip the 134k-filter conversion when nothing changed since last time.
+        if !ruleLists.isEmpty, UserDefaults.standard.string(forKey: Self.sigKey) == inputSignature(),
+           let data = try? Data(contentsOf: Self.cosmeticURL),
+           let index = try? JSONDecoder().decode(CosmeticIndex.self, from: data) {
+            cosmetic = index
+            update(force: false, report: nil)
+            return
         }
         let fresh = Task { await rebuild(); update(force: false, report: nil) }
         guard ruleLists.isEmpty else { return }
@@ -84,6 +108,11 @@ final class BlockingAdapter: ContentPolicy {
         ruleCount = result.ruleCount
         UserDefaults.standard.set(lists.map(\.identifier), forKey: Self.idsKey)
         UserDefaults.standard.set(result.ruleCount, forKey: Self.countKey)
+        UserDefaults.standard.set(inputSignature(), forKey: Self.sigKey)
+        if let data = try? JSONEncoder().encode(result.cosmetic) {
+            try? FileManager.default.createDirectory(at: Self.cosmeticURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: Self.cosmeticURL, options: .atomic)
+        }
         log.info("blocking compiled: \(result.ruleCount) rules in \(lists.count) lists, \(Date().timeIntervalSince(start), format: .fixed(precision: 2))s")
         if changed { onRulesChanged?() }
     }
