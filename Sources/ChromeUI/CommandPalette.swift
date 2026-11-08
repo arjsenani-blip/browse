@@ -283,16 +283,16 @@ public final class PaletteController {
             scrim.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scrim.topAnchor.constraint(equalTo: content.topAnchor),
             scrim.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            hosting.centerXAnchor.constraint(equalTo: (anchor ?? scrim).centerXAnchor).withPriority(.defaultHigh),
+            hosting.centerXAnchor.constraint(equalTo: scrim.centerXAnchor),
             hosting.leadingAnchor.constraint(greaterThanOrEqualTo: scrim.leadingAnchor, constant: 12),
             hosting.trailingAnchor.constraint(lessThanOrEqualTo: scrim.trailingAnchor, constant: -12),
-            hosting.topAnchor.constraint(equalTo: scrim.topAnchor, constant: max(60, content.bounds.height * 0.16)),
+            hosting.centerYAnchor.constraint(equalTo: scrim.centerYAnchor, constant: -content.bounds.height * 0.12),
         ])
         host = scrim
         scrim.alphaValue = 0
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = Tokens.Motion.duration(0.16)
-            scrim.animator().alphaValue = 1
+            scrim.animator().alphaValue = 0.55
         }
     }
 
@@ -311,15 +311,18 @@ public final class PaletteController {
     }
 }
 
-final class PaletteScrim: NSView {
+final class PaletteScrim: NSVisualEffectView {
     var onClick: (() -> Void)?
-    override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() {
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.06).cgColor
-    }
     override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
+        // A faint blur of the app behind the palette (plain dim with Reduce Transparency).
+        material = .fullScreenUI
+        blendingMode = .withinWindow
+        state = .active
+        alphaValue = 1
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
+            material = .windowBackground
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
     override func mouseDown(with event: NSEvent) {

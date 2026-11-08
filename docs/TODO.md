@@ -28,3 +28,5 @@ The user asked for these on 2026-11-08 after testing `/Applications/Aegis.app` (
 
 **Why:** the user is dogfooding and found these rough edges.
 **How to apply:** start with 2 and 3 (cheap, visible), then 1, then 4, then the QA agents. Rebuild and install with `scripts/install.sh`. Commit locally and don't push.
+
+6. **⌘T palette:** center in the window and faintly blur the app behind it. Done 2026-11-08 (NSVisualEffectView scrim at 0.55 alpha, centered). Tune if it looks too strong.
