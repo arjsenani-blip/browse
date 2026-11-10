@@ -65,6 +65,8 @@ public final class ProfileContext {
         config.mediaTypesRequiringUserActionForPlayback = .audio
         config.preferences.isFraudulentWebsiteWarningEnabled = true
         config.preferences.isElementFullscreenEnabled = true
+        // Popup blocker: window.open only from a user gesture.
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.defaultWebpagePreferences.preferredHTTPSNavigationPolicy = settings.httpsOnly ? .userMediatedFallbackToHTTP : .keepAsRequested
         config.upgradeKnownHostsToHTTPS = true

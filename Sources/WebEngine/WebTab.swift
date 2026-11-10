@@ -205,8 +205,11 @@ extension WebTab: WKNavigationDelegate {
             _ = delegate?.webTab(self, openInNewTab: action.request, background: !modifiers.contains(.shift), configuration: nil)
             return (.cancel, preferences)
         }
-        // Strip tracking parameters from top-level navigations by re-issuing the clean URL.
-        if action.targetFrame?.isMainFrame == true, context.settings.stripTrackingParameters,
+        // Strip tracking parameters from top-level GET link/other navigations only:
+        // re-issuing a form POST, reload or back/forward would lose its body or state.
+        let strippable = action.request.httpMethod?.uppercased() ?? "GET" == "GET"
+            && (action.navigationType == .linkActivated || action.navigationType == .other)
+        if strippable, action.targetFrame?.isMainFrame == true, context.settings.stripTrackingParameters,
            let url = action.request.url, let clean = context.policy?.strippedURL(url) {
             webView.load(URLRequest(url: clean))
             return (.cancel, preferences)
@@ -216,11 +219,12 @@ extension WebTab: WKNavigationDelegate {
     }
 
     public func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
-        if let http = response.response as? HTTPURLResponse,
-           let disposition = http.value(forHTTPHeaderField: "Content-Disposition")?.lowercased(),
-           disposition.hasPrefix("attachment") {
-            return .download
-        }
+        let attachment = (response.response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") ?? false
+        // No drive-by downloads: subframes (e.g. hidden cross-origin iframes) may
+        // never start a download; only the page itself can.
+        if !response.isForMainFrame && (attachment || !response.canShowMIMEType) { return .cancel }
+        if attachment { return .download }
         return response.canShowMIMEType ? .allow : .download
     }
 

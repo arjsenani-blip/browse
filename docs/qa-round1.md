@@ -4,12 +4,12 @@ Two agents tested independently, one for function, performance and battery ("Rig
 
 | # | Finding | Source | Status |
 |---|---|---|---|
-| 1 | Session wiped on a locked-screen launch (file protection + nil-on-error) | R1 | fixing |
-| 2 | Private windows not isolated (shared space, ⇧⌘T → history, downloads persisted) | R2 | fixing |
-| 3 | Gesture-less cross-origin iframe downloads, re-run on restore | R3 | fixing |
-| 4 | No popup blocker | R5 | fixing |
-| 5 | Parameter stripping turns POST into GET | R4 | fixing |
-| 6 | Crashed background tabs reload instantly (battery, jetsam loop) | R6 | fixing |
+| 1 | Session wiped on a locked-screen launch (file protection + nil-on-error) | R1 | done (no protection, set-aside + rolling prev copy) |
+| 2 | Private windows not isolated (shared space, ⇧⌘T → history, downloads persisted) | R2 | todo |
+| 3 | Gesture-less cross-origin iframe downloads, re-run on restore | R3 | done (subframes can't download) |
+| 4 | No popup blocker | R5 | done (javaScriptCanOpenWindowsAutomatically = false) |
+| 5 | Parameter stripping turns POST into GET | R4 | done (GET link/other only) |
+| 6 | Crashed background tabs reload instantly (battery, jetsam loop) | R6 | todo |
 | 7 | No first run / Arc import entry; empty state under the palette | T1, T8 | todo |
 | 8 | App-modal JS alerts freeze the app | R10 | todo |
 | 9 | History double-counts each load (frecency skew) | R7 | todo |
