@@ -33,10 +33,16 @@ public final class Favicons {
     public func load(for url: URL?, completion: @escaping (NSImage?) -> Void) {
         guard let url, let host = url.host(), let scheme = url.scheme, scheme.hasPrefix("http") else { return completion(nil) }
         if let image = cached(for: url) { return completion(image) }
+        var parts = URLComponents()
+        parts.scheme = scheme
+        parts.host = host
+        parts.port = url.port
+        parts.path = "/favicon.ico"
+        // A host that can't form a URL (malformed or odd IPv6) gets no icon rather than a crash.
+        guard let icon = parts.url else { return completion(nil) }
         waiters[host, default: []].append(completion)
         guard !inflight.contains(host) else { return }
         inflight.insert(host)
-        let icon = URL(string: "\(scheme)://\(host)/favicon.ico")!
         let file = folder.appending(path: host + ".png")
         let session = self.session
         Task.detached(priority: .utility) {

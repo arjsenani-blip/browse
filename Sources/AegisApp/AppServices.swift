@@ -193,16 +193,18 @@ extension AppServices: WebTabDelegate {
         }
     }
 
-    func webTab(_ tab: WebTab, openInNewTab request: URLRequest, background: Bool) -> WKWebView? {
+    func webTab(_ tab: WebTab, openInNewTab request: URLRequest, background: Bool, configuration: WKWebViewConfiguration?) -> WKWebView? {
         guard let space = store.space(containing: tab.id) else { return nil }
         let id = store.openTab(request.url, select: !background, in: space.id)
-        if background {
-            // Created lazily on first show; the record holds the URL.
+        guard let configuration else {
+            // ⌘-click: a normal tab that loads its URL when shown.
+            if !background { frontController?.scheduleRefresh() }
             return nil
         }
-        // window.open / target=_blank: WebKit needs a view built from its configuration.
-        let config = tab.webView?.configuration ?? WKWebViewConfiguration()
-        return runtime.adopt(id, configuration: config)
+        // window.open / target=_blank: WebKit requires a view built from exactly
+        // this configuration (anything else raises and aborts the app). It
+        // loads the request itself, and keeps window.opener working.
+        return runtime.adopt(id, configuration: configuration)
     }
 
     func webTabDidRequestClose(_ tab: WebTab) {

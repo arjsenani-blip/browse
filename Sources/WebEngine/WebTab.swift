@@ -6,7 +6,9 @@ import BrowserCore
 public protocol WebTabDelegate: AnyObject {
     func webTabDidChange(_ tab: WebTab)
     func webTab(_ tab: WebTab, didCommit url: URL, title: String?, typed: Bool)
-    func webTab(_ tab: WebTab, openInNewTab request: URLRequest, background: Bool) -> WKWebView?
+    /// `configuration` is WebKit's own for window.open/target=_blank: the returned view MUST be built
+    /// from it, or WebKit raises an exception. It's nil for ⌘-click, where nothing should be returned.
+    func webTab(_ tab: WebTab, openInNewTab request: URLRequest, background: Bool, configuration: WKWebViewConfiguration?) -> WKWebView?
     func webTabDidRequestClose(_ tab: WebTab)
     func webTab(_ tab: WebTab, autofillMessage body: [String: Any])
 }
@@ -200,7 +202,7 @@ extension WebTab: WKNavigationDelegate {
     public func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, preferences: WKWebpagePreferences) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
         let modifiers = action.modifierFlags
         if action.navigationType == .linkActivated, modifiers.contains(.command) {
-            _ = delegate?.webTab(self, openInNewTab: action.request, background: !modifiers.contains(.shift))
+            _ = delegate?.webTab(self, openInNewTab: action.request, background: !modifiers.contains(.shift), configuration: nil)
             return (.cancel, preferences)
         }
         // Strip tracking parameters from top-level navigations by re-issuing the clean URL.
@@ -256,7 +258,7 @@ extension WebTab: WKNavigationDelegate {
 
 extension WebTab: WKUIDelegate {
     public func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        delegate?.webTab(self, openInNewTab: action.request, background: false)
+        delegate?.webTab(self, openInNewTab: action.request, background: false, configuration: configuration)
     }
 
     public func webViewDidClose(_ webView: WKWebView) {
