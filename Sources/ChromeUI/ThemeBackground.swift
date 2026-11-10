@@ -85,7 +85,7 @@ public final class ThemeBackgroundView: NSView {
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0
         fade.toValue = 1
-        fade.duration = Tokens.Motion.duration(0.34)
+        fade.duration = Tokens.Motion.duration(0.24)
         fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         incoming.add(fade, forKey: "fade")
         grain.opacity = grainOpacity(themes[index])

@@ -33,6 +33,8 @@ public enum Tokens {
         public static let select: TimeInterval = 0.25
         public static let sidebarToggle: TimeInterval = 0.35
         public static let reduced: TimeInterval = 0.15
+        /// Space paging spring response: quick and snappy, still critically damped.
+        public static let pageResponse: Double = 0.24
         public static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
         public static func duration(_ d: TimeInterval) -> TimeInterval { reduceMotion ? reduced : d }
     }

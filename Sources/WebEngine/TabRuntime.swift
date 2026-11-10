@@ -64,7 +64,12 @@ public final class TabRuntime {
     public func show(_ id: TabID) -> WKWebView? {
         guard let record = store.tabs[id], let t = tab(id) else { return nil }
         let view = t.wake(url: record.url, interactionState: record.isSleeping ? record.interactionState : nil)
-        store.update(id) { $0.isSleeping = false; $0.lastActive = Date() }
+        // Write only on a real change. Showing happens on every redraw, and a
+        // fresh timestamp each time made the store "change", which scheduled the
+        // next redraw: a busy loop that pinned a CPU core while idle.
+        if record.isSleeping || Date().timeIntervalSince(record.lastActive) > 30 {
+            store.update(id) { $0.isSleeping = false; $0.lastActive = Date() }
+        }
         return view
     }
 
@@ -114,6 +119,7 @@ public final class TabRuntime {
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { _ = Task { await self?.runHibernation() } }
         }
+        timer?.tolerance = 15   // let macOS batch this wake-up
     }
 
     public func runHibernation(now: Date = Date()) async {

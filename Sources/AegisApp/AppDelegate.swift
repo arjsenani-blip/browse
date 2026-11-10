@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             await services.start()
             services.newWindow()
             DebugSnapshot.runIfRequested(services: services)
+            SettingsWindow.runDebugSnapshotIfRequested(services: services)
         }
     }
 

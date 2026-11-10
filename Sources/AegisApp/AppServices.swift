@@ -66,12 +66,14 @@ final class AppServices {
         runtime.startHibernation()
         store.runArchive()
         Task { try? await engine.refreshHistoryCache() }
-        saveTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.saveSession()
-                self?.store.runArchive()
-            }
+        // Battery: nothing polls. The session saves a few seconds after it
+        // actually changes; archiving runs every 10 minutes with generous
+        // tolerance so macOS can coalesce the wake-up with other work.
+        observeForSave()
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.store.runArchive() }
         }
+        saveTimer?.tolerance = 120
         Task.detached(priority: .background) { [history] in try? await history?.decayInputHistory() }
         DownloadCenter.shared.onChange = { [weak self] in self?.controllers.forEach { $0.refreshLibrary() } }
     }
@@ -131,8 +133,40 @@ final class AppServices {
 
     // MARK: Session
 
-    func saveSession() {
-        runtime.captureStates()
+    private var saveWork: DispatchWorkItem?
+    private var lastStateCapture = Date.distantPast
+
+    private func observeForSave() {
+        withObservationTracking {
+            _ = store.spaces
+            _ = store.tabs
+            _ = store.currentSpaceID
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.scheduleSave()
+                self?.observeForSave()
+            }
+        }
+    }
+
+    /// Coalesces bursts (page loads update titles many times) into one write.
+    private func scheduleSave() {
+        guard saveWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.saveWork = nil
+            self?.saveSession(captureLiveState: false)
+        }
+        saveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+    }
+
+    /// `captureLiveState` serializes every awake tab's back/forward history,
+    /// which is the expensive part: done at quit, and at most once a minute otherwise.
+    func saveSession(captureLiveState: Bool = true) {
+        if captureLiveState || Date().timeIntervalSince(lastStateCapture) > 60 {
+            runtime.captureStates()
+            lastStateCapture = Date()
+        }
         var snap = store.snapshot()
         // Private spaces are never written to disk.
         let privateSpaces = Set(snap.spaces.filter { privateProfiles.contains($0.profileID) }.map(\.id))

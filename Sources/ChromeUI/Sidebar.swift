@@ -263,6 +263,7 @@ public final class SidebarViewController: NSViewController {
             page.apply(new.pages[i], style: style)
         }
         if pagesChanged { layoutPages() }
+        predrawNeighbours()
 
         rebuildSpaceIndicator()
 
@@ -320,11 +321,39 @@ public final class SidebarViewController: NSViewController {
         CATransaction.commit()
     }
 
+    /// Draws the pages either side of the current one ahead of time (they're
+    /// clipped, so AppKit wouldn't draw them until they slide into view, which
+    /// cost ~15 ms in the first frame of a swipe). Idle-time work.
+    private func predrawNeighbours() {
+        let i = displayedIndex
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.swiping else { return }
+            for n in [i - 1, i + 1] where self.pages.indices.contains(n) {
+                let page = self.pages[n]
+                page.layoutSubtreeIfNeeded()
+                page.display()
+            }
+        }
+    }
+
     private func setStripX(_ x: CGFloat) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         strip.layer?.removeAnimation(forKey: "page")
-        strip.setFrameOrigin(NSPoint(x: x, y: 0))
+        pager.layer?.removeAnimation(forKey: "settle")
+        pager.layer?.sublayerTransform = CATransform3DIdentity
+        if strip.frame.origin.x != x { strip.setFrameOrigin(NSPoint(x: x, y: 0)) }
+        CATransaction.commit()
+    }
+
+    /// Mid-gesture movement: a render-server-only translation of the pager's
+    /// sublayers. Moving the strip's AppKit frame cost 20+ ms on the first frame
+    /// of a drag (AppKit re-derives geometry for every view inside); the frame
+    /// is set once at release instead, hidden under the settle spring.
+    private func setDragOffset(_ dx: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pager.layer?.sublayerTransform = CATransform3DMakeTranslation(dx, 0, 0)
         CATransaction.commit()
     }
 
@@ -349,7 +378,7 @@ public final class SidebarViewController: NSViewController {
             return
         }
         let spring = CASpringAnimation(keyPath: "position.x")
-        let response = 0.34, damping = 1.0
+        let response = Tokens.Motion.pageResponse, damping = 1.0
         spring.mass = 1
         spring.stiffness = pow(2 * .pi / response, 2)
         spring.damping = 4 * .pi * damping / response
@@ -371,12 +400,13 @@ public final class SidebarViewController: NSViewController {
         strip.layer?.removeAnimation(forKey: "page")
         swiping = true
         var warmed = false
+        var samples: [(t: CFTimeInterval, amount: CGFloat)] = []
         // gestureAmount > 0 is a swipe to the right, which reveals the space on the left.
         event.trackSwipeEvent(options: [.lockDirection, .clampGestureAmount],
-                              dampenAmountThresholdMin: -CGFloat(count - 1 - index), max: CGFloat(index)) { [weak self] amount, _, complete, _ in
+                              dampenAmountThresholdMin: -CGFloat(count - 1 - index), max: CGFloat(index)) { [weak self] amount, phase, complete, stop in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                self.setStripX((-CGFloat(index) + amount) * w)
+                guard let self, self.swiping else { return }
+                self.setDragOffset(amount * w)
                 let neighbour = amount > 0 ? index - 1 : index + 1
                 if neighbour >= 0, neighbour < count {
                     self.delegate?.sidebarSwipeProgress(from: index, to: neighbour, fraction: min(1, Double(abs(amount))))
@@ -385,7 +415,24 @@ public final class SidebarViewController: NSViewController {
                     warmed = true
                     self.delegate?.sidebarWillSwipe(toSpace: neighbour)
                 }
-                if complete {
+                let now = CACurrentMediaTime()
+                samples.append((now, amount))
+                samples.removeAll { now - $0.t > 0.08 }
+                if phase == .ended || phase == .cancelled {
+                    // Fingers lifted: take over from the system's (slower) settle
+                    // with our own snappy spring, carrying the flick's velocity.
+                    stop.pointee = true
+                    let velocity = samples.count > 1
+                        ? (samples.last!.amount - samples.first!.amount) / CGFloat(max(0.008, samples.last!.t - samples.first!.t))
+                        : 0                                   // pages per second
+                    let projected = amount + velocity * 0.12  // where a flick would carry it
+                    var target = index
+                    if projected > 0.35 || velocity > 1.2 { target = index - 1 }
+                    if projected < -0.35 || velocity < -1.2 { target = index + 1 }
+                    target = min(max(0, target), count - 1)
+                    if phase == .cancelled { target = index }
+                    self.settleSwipe(from: amount, index: index, to: target, velocity: velocity)
+                } else if complete {
                     let target = amount > 0.5 ? index - 1 : (amount < -0.5 ? index + 1 : index)
                     self.finishSwipe(to: target)
                 }
@@ -394,10 +441,63 @@ public final class SidebarViewController: NSViewController {
         return true
     }
 
-    private func finishSwipe(to target: Int) {
+    /// The release: a fast, critically damped spring from where the finger
+    /// left the strip, starting at the finger's speed, then commit.
+    private func settleSwipe(from amount: CGFloat, index: Int, to target: Int, velocity: CGFloat) {
+        let w = pageWidth
+        let startDX = amount * w                       // current visual offset from rest
+        let endDX = CGFloat(index - target) * w        // offset that shows the target page
+        if target != index { delegate?.sidebarSwipeProgress(from: index, to: target, fraction: 1) }
+        else { delegate?.sidebarSwipeProgress(from: index, to: index, fraction: 0) }
         swiping = false
         displayedIndex = target
-        placeStrip(at: target)
+        // The motion is a render-server-only spring on the pager's sublayer
+        // translation; the strip's AppKit frame (the costly part) is moved only
+        // once the motion has finished, when a brief main-thread pause can't show.
+        let landed = { [weak self] in
+            guard let self else { return }
+            self.setStripX(-CGFloat(target) * w)       // resets the translation too
+            self.predrawNeighbours()
+        }
+        guard !Tokens.Motion.reduceMotion, let layer = pager.layer, abs(endDX - startDX) > 0.5 else {
+            landed(); commitSwipe(to: target); return
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { MainActor.assumeIsolated { landed() } }
+        let response = Tokens.Motion.pageResponse
+        let spring = CASpringAnimation(keyPath: "sublayerTransform.translation.x")
+        spring.mass = 1
+        spring.stiffness = pow(2 * .pi / response, 2)
+        spring.damping = 4 * .pi * 0.92 / response
+        let distance = endDX - startDX
+        spring.initialVelocity = distance != 0 ? (velocity * w) / distance : 0   // in "distances per second"
+        spring.fromValue = startDX
+        spring.toValue = endDX
+        spring.duration = spring.settlingDuration
+        layer.sublayerTransform = CATransform3DMakeTranslation(endDX, 0, 0)
+        layer.add(spring, forKey: "settle")
+        CATransaction.commit()
+        commitSwipe(to: target)
+    }
+
+    /// Tells the store about the new space and applies anything held back during the gesture.
+    private func commitSwipe(to target: Int) {
+        if target != state.currentIndex {
+            committedBySwipe = true
+            delegate?.sidebarSwitchSpace(target)
+        }
+        if let pending = pendingState {
+            pendingState = nil
+            apply(pending)
+        }
+    }
+
+    private func finishSwipe(to target: Int, placing: Bool = true) {
+        swiping = false
+        displayedIndex = target
+        if placing { placeStrip(at: target) }
+        predrawNeighbours()
         if target != state.currentIndex {
             committedBySwipe = true
             delegate?.sidebarSwitchSpace(target)
@@ -421,16 +521,22 @@ public final class SidebarViewController: NSViewController {
 
     public func debugSwipe(amount: CGFloat) {
         let index = displayedIndex, count = state.pages.count, w = pageWidth
-        setStripX((-CGFloat(index) + amount) * w)
+        _ = w
+        setDragOffset(amount * pageWidth)
         let neighbour = amount > 0 ? index - 1 : index + 1
         if neighbour >= 0, neighbour < count {
             delegate?.sidebarSwipeProgress(from: index, to: neighbour, fraction: min(1, Double(abs(amount))))
         }
     }
 
-    public func debugSwipeEnd(amount: CGFloat) {
-        let index = displayedIndex
-        finishSwipe(to: amount > 0.5 ? index - 1 : (amount < -0.5 ? index + 1 : index))
+    /// Releases like real fingers: the snappy settle spring with this velocity (pages/s).
+    public func debugSwipeEnd(amount: CGFloat, velocity: CGFloat = 0) {
+        let index = displayedIndex, count = state.pages.count
+        let projected = amount + velocity * 0.12
+        var target = index
+        if projected > 0.35 || velocity > 1.2 { target = index - 1 }
+        if projected < -0.35 || velocity < -1.2 { target = index + 1 }
+        settleSwipe(from: amount, index: index, to: min(max(0, target), count - 1), velocity: velocity)
     }
 
     public var debugCurrentIndex: Int { displayedIndex }

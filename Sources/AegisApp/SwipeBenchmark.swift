@@ -16,8 +16,9 @@ final class SwipeBenchmark: NSObject {
     private var intervals: [Double] = []
     private var work: [Double] = []
     private var phase = 0
+    private var settleFrames = -1
     private let done: () -> Void
-    private let duration = 0.42
+    private let duration = 0.22   // finger travel before release
 
     init(controller: BrowserWindowController, done: @escaping () -> Void) {
         self.controller = controller
@@ -32,30 +33,43 @@ final class SwipeBenchmark: NSObject {
         self.link = link
     }
 
+    private var settleStart: CFTimeInterval = 0
+
     @objc private func tick(_ link: CADisplayLink) {
         let now = link.timestamp
         if start == 0 { start = now; last = now }
         intervals.append((now - last) * 1000)
         last = now
+        let sign: CGFloat = phase == 0 ? -1 : 1    // swipe left (to next), then back
+        if settleFrames >= 0 {
+            // After release: the settle spring runs on the render server; watch it land.
+            if now - settleStart > 0.32 {
+                report("release spring \(phase == 0 ? "→ next" : "← back")")
+                settleFrames = -1
+                phase += 1
+                if phase < 2, controller.debugSidebar.debugSwipeBegin() {
+                    start = 0; intervals = []; work = []
+                } else {
+                    link.invalidate()
+                    measureKeyboardSwitch()
+                }
+            }
+            return
+        }
         let t0 = CACurrentMediaTime()
         let p = min(1, (now - start) / duration)
-        let eased = 1 - pow(1 - p, 3)              // decelerating, like a flick settling
-        let sign: CGFloat = phase == 0 ? -1 : 1    // swipe left (to next), then back
-        controller.debugSidebar.debugSwipe(amount: sign * CGFloat(eased))
-        if p >= 1 {
-            controller.debugSidebar.debugSwipeEnd(amount: sign)
-            report("swipe \(phase == 0 ? "→ next" : "← back")")
-            phase += 1
-            if phase < 2, controller.debugSidebar.debugSwipeBegin() {
-                start = 0; intervals = []; work = []
-            } else {
-                link.invalidate()
-                // A keyboard switch (spring + background fade), measured by sampling.
-                measureKeyboardSwitch()
-                return
-            }
-        }
+        let travel: CGFloat = 0.6                  // let go 60% of the way, mid-flick
+        controller.debugSidebar.debugSwipe(amount: sign * travel * CGFloat(p))
         work.append((CACurrentMediaTime() - t0) * 1000)
+        if p >= 1 {
+            report("drag \(phase == 0 ? "→ next" : "← back")")
+            let r0 = CACurrentMediaTime()
+            controller.debugSidebar.debugSwipeEnd(amount: sign * travel, velocity: sign * travel / CGFloat(duration))
+            print(String(format: "SWIPEBENCH release main-thread cost %.2f ms", (CACurrentMediaTime() - r0) * 1000))
+            settleFrames = 0
+            settleStart = now
+            intervals = []; work = []
+        }
     }
 
     private func measureKeyboardSwitch() {

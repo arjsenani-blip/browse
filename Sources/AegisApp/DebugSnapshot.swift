@@ -13,6 +13,9 @@ enum DebugSnapshot {
         guard let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count else { return }
         let out = URL(fileURLWithPath: args[i + 1])
         if args.contains("--dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+        if args.contains("--fullscreen") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { services.frontController?.window?.toggleFullScreen(nil) }
+        }
         let delay = args.firstIndex(of: "--delay").flatMap { Double(args[$0 + 1]) } ?? 6
         if let j = args.firstIndex(of: "--open"), j + 1 < args.count {
             for raw in args[(j + 1)...].prefix(while: { !$0.hasPrefix("--") }) {

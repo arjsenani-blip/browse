@@ -97,7 +97,12 @@ public final class ContentCard: NSView {
         clip.layer?.cornerRadius = r
     }
 
+    private var lastProgress: (Double, Bool, Double)?
+
     public func setProgress(_ value: Double, loading: Bool, hue: Double) {
+        // Redraws are frequent; only animate when the bar actually changes.
+        if let last = lastProgress, last.0 == value, last.1 == loading, last.2 == hue { return }
+        lastProgress = (value, loading, hue)
         progress.color = Tokens.accent(hue: hue)
         progress.set(value: loading ? value : 1, visible: loading)
     }
