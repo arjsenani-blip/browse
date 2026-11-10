@@ -23,6 +23,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var refreshScheduled = false
     private var findBar: FindBar?
     private let topBar = TopTabBar()
+    private let background = ThemeBackgroundView()
+    private var cardTrailing: NSLayoutConstraint!
+    private var lastSpaceID: UUID?
+    private var warmWork: DispatchWorkItem?
+    private var cardBottom: NSLayoutConstraint!
     private var extensionButtons: [String: NSButton] = [:]
     lazy var extensionWindow: ExtensionWindowAdapter = app.extensions.windowAdapter(for: self) { [unowned self] in
         ExtensionWindowAdapter(window: window!,
@@ -58,12 +63,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         window.delegate = self
 
         sidebar.delegate = self
-        let sideItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+        let sideItem = NSSplitViewItem(viewController: sidebar)
         self.sideItem = sideItem
         sideItem.minimumThickness = Tokens.Size.sidebarMin
         sideItem.maximumThickness = Tokens.Size.sidebarMax
         sideItem.canCollapse = true
-        sideItem.allowsFullHeightLayout = true
+        sideItem.holdingPriority = .init(260)
 
         let contentVC = NSViewController()
         let container = NSView()
@@ -73,14 +78,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         topBar.delegate = self
         container.addSubview(topBar)
         let inset = Tokens.Space.cardInset
+        cardTrailing = card.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -inset)
+        cardBottom = card.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -inset)
         NSLayoutConstraint.activate([
             card.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 0),
-            card.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -inset),
+            cardTrailing, cardBottom,
             topBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             topBar.topAnchor.constraint(equalTo: container.topAnchor),
             topBar.heightAnchor.constraint(equalToConstant: 40),
-            card.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -inset),
         ])
         cardTopToContainer = card.topAnchor.constraint(equalTo: container.topAnchor, constant: inset)
         cardTopToBar = card.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 0)
@@ -96,6 +102,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         // becoming split panes.
         let root = NSViewController()
         root.view = NSView()
+        background.translatesAutoresizingMaskIntoConstraints = false
+        root.view.addSubview(background)
+        NSLayoutConstraint.activate([
+            background.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
+            background.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
+            background.topAnchor.constraint(equalTo: root.view.topAnchor),
+            background.bottomAnchor.constraint(equalTo: root.view.bottomAnchor),
+        ])
         root.addChild(split)
         split.view.translatesAutoresizingMaskIntoConstraints = false
         root.view.addSubview(split.view)
@@ -117,6 +131,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             split.splitView.setPosition(Tokens.Size.sidebarDefault, ofDividerAt: 0)
         }
 
+        split.splitView.dividerStyle = .thin
+        applyTheme(animated: false)
         observeStore()
         app.extensions.didOpen(window: extensionWindow)
         applyTabLayout(animated: false)
@@ -133,7 +149,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         // Inset the card on the left too when there's no sidebar beside it.
         card.superview.flatMap { container in
             container.constraints.first { $0.firstItem === card && $0.firstAttribute == .leading }
-        }?.constant = top ? Tokens.Space.cardInset : 0
+        }?.constant = top ? CGFloat(app.appearance.cardInset) : 0
+        refresh()
+    }
+
+    /// Appearance settings → card radius and inset, background on/off, then a refresh.
+    func applyTheme(animated: Bool) {
+        let a = app.appearance
+        let inset = CGFloat(a.cardInset)
+        cardTrailing?.constant = -inset
+        cardBottom?.constant = -inset
+        cardTopToContainer?.constant = inset
+        card.setCornerRadius(CGFloat(a.cornerRadius))
+        background.enabled = a.tintWindow
         refresh()
     }
 
@@ -167,31 +195,44 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let space = store.currentSpace
         let live = store.selectedTab.flatMap { runtime.tab($0.id) }
         var s = SidebarState()
-        s.spaceName = space.name
-        s.spaceIndex = store.spaces.firstIndex { $0.id == space.id } ?? 0
-        s.spaceCount = store.spaces.count
-        s.accentHue = space.accentHue
-        s.selected = space.selected
         s.blockerOn = app.privacy.blockContent
         func row(_ id: TabID) -> SidebarState.Row? {
             guard let t = store.tabs[id] else { return nil }
-            let w = runtime.tab(id)
+            let w = runtime.existingTab(id)
             let awake = w?.isAwake ?? false
+            let liveTitle = awake ? (w?.title ?? "") : ""
             return SidebarState.Row(
                 id: id,
-                title: awake && !(w?.title.isEmpty ?? true) ? w!.title : t.displayTitle,
+                title: liveTitle.isEmpty ? t.displayTitle : liveTitle,
                 url: awake ? (w?.url ?? t.url) : t.url,
                 sleeping: t.isSleeping || !awake,
                 loading: w?.isLoading ?? false,
                 playing: t.activity.contains(.playingMedia))
         }
-        s.spaceNames = store.spaces.map(\.name)
-        s.spaceHues = store.spaces.map(\.accentHue)
+        s.pages = store.spaces.map { sp in
+            var page = SidebarState.Page(id: sp.id, name: sp.name, theme: sp.resolvedTheme)
+            page.favorites = sp.favorites.compactMap(row)
+            page.pinned = sp.pinned.compactMap(row)
+            page.today = sp.today.compactMap(row)
+            page.selected = sp.selected
+            return page
+        }
+        s.currentIndex = store.spaces.firstIndex { $0.id == space.id } ?? 0
         s.activeDownloads = DownloadCenter.shared.active.count
         s.nowPlaying = nowPlaying()
-        s.favorites = space.favorites.compactMap(row)
-        s.pinned = space.pinned.compactMap(row)
-        s.today = space.today.compactMap(row)
+
+        // Text reads dark or light depending on the gradient behind it.
+        let a = app.appearance
+        var style = SidebarStyle()
+        style.tinted = a.tintWindow
+        style.onDark = a.tintWindow
+            ? background.middle(of: space.resolvedTheme).luminance < 0.36
+            : window?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        style.fontSize = CGFloat(a.fontSize)
+        style.rowHeight = CGFloat(a.rowHeight)
+        style.hue = space.accentHue
+        s.style = style
+
         if let live {
             s.host = live.url?.host() ?? store.selectedTab?.url?.host() ?? ""
             s.isSecure = live.url?.scheme == "https" ? live.isSecure || live.url != nil : (live.url == nil)
@@ -201,10 +242,34 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             card.setProgress(live.progress, loading: live.isLoading, hue: space.accentHue)
             if !live.isLoading && live.progress >= 1 { card.dismissSnapshot() }
         }
+        background.set(themes: store.spaces.map(\.resolvedTheme), current: s.currentIndex, keepingAnimation: true)
+        topBar.appearance = sidebar.view.appearance
         sidebar.apply(s)
         if tabsOnTop { topBar.apply(s) }
         showSelected()
+        if space.id != lastSpaceID {
+            lastSpaceID = space.id
+            warmNeighbourSpaces()
+        }
         window?.title = store.selectedTab?.displayTitle ?? "Aegis"
+    }
+
+    /// After a space switch settles, quietly wake the neighbouring spaces'
+    /// selected tabs off screen. Building a web view costs 30–60 ms; doing it
+    /// here means the next swipe or ⌥⌘[ / ] never builds one mid-animation.
+    private func warmNeighbourSpaces() {
+        warmWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let i = self.store.spaces.firstIndex(where: { $0.id == self.store.currentSpaceID }) else { return }
+            for n in [i + 1, i - 1] where self.store.spaces.indices.contains(n) {
+                guard let id = self.store.spaces[n].selected, let tab = self.store.tabs[id],
+                      self.runtime.existingTab(id)?.isAwake != true else { continue }
+                _ = tab
+                self.runtime.show(id)
+            }
+        }
+        warmWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
 
     /// The most relevant background media: playing first, else paused.
@@ -237,7 +302,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let snapshot = wasSleeping ? runtime.tab(id)?.snapshot : nil
         guard let view = runtime.show(id) else { return }
         if shownTab != id || card.current !== view {
-            card.show(view, snapshot: snapshot)
+            let spaceChanged = shownTab.map { store.space(containing: $0)?.id != store.currentSpaceID } ?? false
+            card.show(view, snapshot: snapshot, crossfade: spaceChanged)
             shownTab = id
             runtime.foreground = [id]
             if findBar != nil { closeFind() }
@@ -257,6 +323,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func debugSetPaletteQuery(_ q: String) { palette.model.query = q }
+    var debugSidebar: SidebarViewController { sidebar }
 
     func navigate(to url: URL, newTab: Bool, background: Bool = false, typed: Bool = true) {
         if palette.isOpen { palette.dismiss() }
@@ -332,7 +399,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func toggleSidebar() {
         if tabsOnTop { return }
-        split.toggleSidebar(nil)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = Tokens.Motion.duration(Tokens.Motion.sidebarToggle)
+            ctx.allowsImplicitAnimation = true
+            sideItem.animator().isCollapsed.toggle()
+        }
     }
 
     func toggleReader() {
@@ -517,10 +588,15 @@ extension BrowserWindowController: SidebarDelegate {
     func sidebarPictureInPicture(_ id: TabID) { runtime.tab(id)?.togglePictureInPicture() }
     func sidebarOpenLibrary(from view: NSView) { openLibrary(from: view) }
 
+    func sidebarSwipeProgress(from: Int, to: Int, fraction: Double) {
+        if fraction < 0 { background.animate(to: to) } else { background.blend(from: from, to: to, fraction: fraction) }
+    }
+
     func sidebarWillSwipe(toSpace index: Int) {
-        // Start waking the target space's tab so it's painting by the time the swipe lands.
+        // Wake the target space's tab now (off screen), so its page is already
+        // painted when the swipe lands instead of loading after.
         guard store.spaces.indices.contains(index), let id = store.spaces[index].selected else { return }
-        _ = runtime.tab(id)
+        runtime.show(id)
     }
 
     func openLibrary(from view: NSView? = nil, tab: LibraryModel.Tab? = nil) {

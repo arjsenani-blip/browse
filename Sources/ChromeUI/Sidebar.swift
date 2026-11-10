@@ -2,6 +2,7 @@ import AppKit
 import BrowserCore
 
 /// What the sidebar draws, computed by the window controller from the store.
+/// Every space is a page, so the swipe can show real neighbours side by side.
 public struct SidebarState: Equatable {
     public struct Row: Equatable {
         public var id: TabID
@@ -14,26 +15,64 @@ public struct SidebarState: Equatable {
             self.id = id; self.title = title; self.url = url; self.sleeping = sleeping; self.loading = loading; self.playing = playing
         }
     }
-    public var spaceName: String = ""
-    public var spaceIndex: Int = 0
-    public var spaceCount: Int = 1
-    public var accentHue: Double = 0.48
+
+    public struct Page: Equatable {
+        public var id: UUID
+        public var name: String
+        public var theme: SpaceTheme
+        public var favorites: [Row] = []
+        public var pinned: [Row] = []
+        public var today: [Row] = []
+        public var selected: TabID?
+        public init(id: UUID, name: String, theme: SpaceTheme) { self.id = id; self.name = name; self.theme = theme }
+    }
+
+    public var pages: [Page] = []
+    public var currentIndex = 0
     public var host: String = ""
     public var isSecure = false
     public var blockerOn = true
     public var canGoBack = false
     public var canGoForward = false
     public var isLoading = false
-    public var favorites: [Row] = []
-    public var pinned: [Row] = []
-    public var today: [Row] = []
-    public var selected: TabID?
-    /// Every space's name and hue, for the swipe's neighbour placeholders.
-    public var spaceNames: [String] = []
-    public var spaceHues: [Double] = []
     public var nowPlaying: NowPlaying?
     public var activeDownloads = 0
+    public var style = SidebarStyle()
     public init() {}
+
+    // Current-page conveniences (the top tab bar and older callers use these).
+    var current: Page? { pages.indices.contains(currentIndex) ? pages[currentIndex] : nil }
+    public var favorites: [Row] { current?.favorites ?? [] }
+    public var pinned: [Row] { current?.pinned ?? [] }
+    public var today: [Row] { current?.today ?? [] }
+    public var selected: TabID? { current?.selected }
+    public var spaceName: String { current?.name ?? "" }
+    public var accentHue: Double { current.map { $0.theme.top.mixed(with: $0.theme.bottom, 0.5).hue } ?? 0.48 }
+}
+
+/// How the sidebar should read over the current background.
+public struct SidebarStyle: Equatable {
+    /// Text and fills tuned for a dark background.
+    public var onDark = false
+    /// Drawn over the space gradient (white-based fills) rather than the plain system sidebar.
+    public var tinted = true
+    public var fontSize: CGFloat = 13
+    public var rowHeight: CGFloat = 30
+    public var hue: Double = 0.48
+    public init() {}
+
+    var selectionFill: NSColor {
+        tinted ? NSColor.white.withAlphaComponent(onDark ? 0.16 : 0.62) : Tokens.selectionFill(hue: hue)
+    }
+    var quietFill: NSColor {
+        tinted ? NSColor.white.withAlphaComponent(onDark ? 0.08 : 0.36) : NSColor.controlBackgroundColor.withAlphaComponent(0.55)
+    }
+    var pillFill: NSColor {
+        tinted ? NSColor.white.withAlphaComponent(onDark ? 0.10 : 0.55) : NSColor.controlBackgroundColor.withAlphaComponent(0.6)
+    }
+    var hairline: NSColor {
+        tinted ? NSColor.white.withAlphaComponent(onDark ? 0.10 : 0.45) : NSColor.separatorColor.withAlphaComponent(0.4)
+    }
 }
 
 /// Media playing in a tab you're not looking at.
@@ -66,10 +105,14 @@ public protocol SidebarDelegate: AnyObject {
     /// The swipe is about to show this space; warm its content.
     func sidebarWillSwipe(toSpace index: Int)
     func sidebarSpaceMenu() -> NSMenu?
+    /// Live position between two spaces (0 = `from`, 1 = `to`) for the background cross-fade;
+    /// a negative fraction means "animate from `from` to `to`" (keyboard or dot switch).
+    func sidebarSwipeProgress(from: Int, to: Int, fraction: Double)
 }
 
-/// The vertical sidebar: navigation, address pill, favorites grid, pinned and
-/// today's tabs, and the space switcher. Plain AppKit; rows are reused.
+/// The vertical sidebar: fixed navigation and address pill on top, a strip of
+/// live space pages in the middle (what the swipe moves), the space switcher
+/// and library at the bottom. Plain AppKit, frame-based paging, rows reused.
 @MainActor
 public final class SidebarViewController: NSViewController {
     public weak var delegate: SidebarDelegate?
@@ -79,104 +122,53 @@ public final class SidebarViewController: NSViewController {
     private let forwardButton = SidebarViewController.iconButton("chevron.right", "Forward")
     private let reloadButton = SidebarViewController.iconButton("arrow.clockwise", "Reload")
     private let urlPill = URLPill()
-    private let favoritesGrid = NSStackView()
-    private let extensionRow = NSStackView()
-    private var favoritesTop: NSLayoutConstraint?
-    private let table = SidebarTableView()
+    private let pager = PagerClipView()
+    private let strip = NSView()
+    private var pages: [SpacePageView] = []
+    private let nowPlayingView = NowPlayingStrip()
     private let spaceDots = NSStackView()
     private let spaceLabel = NSTextField(labelWithString: "")
-    private var rows: [Item] = []
-    private let content = NSView()
-    private let nowPlayingView = NowPlayingStrip()
     private let libraryButton = SidebarViewController.iconButton("tray.and.arrow.down", "Library: Downloads and Media")
     private let libraryBadge = NSTextField(labelWithString: "")
-    // Swipe between spaces
-    private let leftPane = NSImageView()
-    private let rightPane = NSImageView()
-    private let wash = NSView()
-    private var snapshots: [Int: NSImage] = [:]
-    private var swiping = false
 
-    enum Item: Equatable {
-        case tab(SidebarState.Row, TabTier)
-        case divider
-        case newTab
-    }
+    // Paging
+    private var displayedIndex = 0
+    private var swiping = false
+    private var pendingState: SidebarState?
+    private var committedBySwipe = false
 
     public override func loadView() {
         let host = SwipeHostView()
-        host.translatesAutoresizingMaskIntoConstraints = false
-        host.wantsLayer = true
-        host.layer?.masksToBounds = true
         host.onSwipeBegan = { [weak self] event in self?.trackSwipe(event) ?? false }
-        wash.wantsLayer = true
-        for v in [wash, leftPane, rightPane, content] as [NSView] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            host.addSubview(v)
-        }
-        content.wantsLayer = true
-        for pane in [leftPane, rightPane] {
-            pane.imageScaling = .scaleNone
-            pane.imageAlignment = .alignTopLeft
-            pane.wantsLayer = true
-            pane.isHidden = true
-        }
-        NSLayoutConstraint.activate([
-            wash.leadingAnchor.constraint(equalTo: host.leadingAnchor), wash.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-            wash.topAnchor.constraint(equalTo: host.topAnchor), wash.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-            content.leadingAnchor.constraint(equalTo: host.leadingAnchor), content.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-            content.topAnchor.constraint(equalTo: host.topAnchor), content.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-            leftPane.trailingAnchor.constraint(equalTo: content.leadingAnchor), leftPane.widthAnchor.constraint(equalTo: content.widthAnchor),
-            leftPane.topAnchor.constraint(equalTo: host.topAnchor), leftPane.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-            rightPane.leadingAnchor.constraint(equalTo: content.trailingAnchor), rightPane.widthAnchor.constraint(equalTo: content.widthAnchor),
-            rightPane.topAnchor.constraint(equalTo: host.topAnchor), rightPane.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-        ])
-        let root = content
 
         let nav = NSStackView(views: [backButton, forwardButton, reloadButton])
         nav.spacing = 6
         backButton.target = self; backButton.action = #selector(back)
         forwardButton.target = self; forwardButton.action = #selector(forward)
         reloadButton.target = self; reloadButton.action = #selector(reload)
-
         urlPill.onClick = { [weak self] in self?.delegate?.sidebarOpenPalette() }
 
-        favoritesGrid.orientation = .horizontal
-        favoritesGrid.distribution = .fillEqually
-        favoritesGrid.spacing = 8
-
-        table.headerView = nil
-        table.backgroundColor = .clear
-        table.rowHeight = Tokens.Size.tabRow
-        table.intercellSpacing = NSSize(width: 0, height: Tokens.Space.tabGap)
-        table.style = .plain
-        table.selectionHighlightStyle = .none
-        table.addTableColumn(NSTableColumn(identifier: .init("tab")))
-        table.dataSource = self
-        table.delegate = self
-        table.target = self
-        table.action = #selector(rowClicked)
-        table.registerForDraggedTypes([.aegisTab])
-        table.setDraggingSourceOperationMask(.move, forLocal: true)
-        table.menuProvider = { [weak self] row in
-            guard let self, row >= 0, row < self.rows.count, case .tab(let r, _) = self.rows[row] else { return nil }
-            return self.delegate?.sidebarContextMenu(for: r.id)
-        }
-        let scroll = SwipeAwareScrollView()
-        scroll.onSwipeBegan = { [weak self] event in self?.trackSwipe(event) ?? false }
-        scroll.horizontalScrollElasticity = .none
-        scroll.documentView = table
-        scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
-        scroll.automaticallyAdjustsContentInsets = false
+        pager.wantsLayer = true
+        pager.layer?.masksToBounds = true
+        pager.onLayout = { [weak self] in self?.layoutPages() }
+        strip.wantsLayer = true
+        pager.addSubview(strip)
 
         let spaceMenuHost = MenuHostView()
         spaceMenuHost.menuProvider = { [weak self] in self?.delegate?.sidebarSpaceMenu() }
         spaceLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         spaceLabel.textColor = Tokens.secondaryInk
-        spaceDots.spacing = 8
+        spaceDots.spacing = 7
+        let spaceGroup = NSStackView(views: [spaceDots, spaceLabel])
+        spaceGroup.spacing = 8
+        spaceGroup.translatesAutoresizingMaskIntoConstraints = false
+        spaceMenuHost.addSubview(spaceGroup)
+        NSLayoutConstraint.activate([
+            spaceGroup.leadingAnchor.constraint(equalTo: spaceMenuHost.leadingAnchor), spaceGroup.trailingAnchor.constraint(equalTo: spaceMenuHost.trailingAnchor),
+            spaceGroup.topAnchor.constraint(equalTo: spaceMenuHost.topAnchor), spaceGroup.bottomAnchor.constraint(equalTo: spaceMenuHost.bottomAnchor),
+        ])
+        spaceMenuHost.toolTip = "Swipe with two fingers to switch spaces. Right-click to rename or recolour."
+
         let newTab = SidebarViewController.iconButton("plus", "New Tab (⌘T)")
         newTab.target = self; newTab.action = #selector(newTabClicked)
         libraryButton.target = self; libraryButton.action = #selector(libraryClicked)
@@ -194,15 +186,6 @@ public final class SidebarViewController: NSViewController {
             libraryBadge.heightAnchor.constraint(equalToConstant: 12),
             libraryBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 12),
         ])
-        let spaceGroup = NSStackView(views: [spaceDots, spaceLabel])
-        spaceGroup.spacing = 8
-        spaceGroup.translatesAutoresizingMaskIntoConstraints = false
-        spaceMenuHost.addSubview(spaceGroup)
-        NSLayoutConstraint.activate([
-            spaceGroup.leadingAnchor.constraint(equalTo: spaceMenuHost.leadingAnchor), spaceGroup.trailingAnchor.constraint(equalTo: spaceMenuHost.trailingAnchor),
-            spaceGroup.topAnchor.constraint(equalTo: spaceMenuHost.topAnchor), spaceGroup.bottomAnchor.constraint(equalTo: spaceMenuHost.bottomAnchor),
-        ])
-        spaceMenuHost.toolTip = "Swipe with two fingers to switch spaces. Right-click to rename."
         let footer = NSStackView(views: [spaceMenuHost, NSView(), libraryButton, newTab])
         footer.spacing = 8
         nowPlayingView.onToggle = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarToggleMedia(id) } }
@@ -210,51 +193,53 @@ public final class SidebarViewController: NSViewController {
         nowPlayingView.onOpen = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarSelect(id) } }
         nowPlayingView.isHidden = true
 
-        extensionRow.orientation = .horizontal
-        extensionRow.spacing = 6
-        extensionRow.isHidden = true
-        for v in [nav, urlPill, extensionRow, favoritesGrid, scroll, nowPlayingView, footer] as [NSView] {
+        for v in [nav, urlPill, pager, nowPlayingView, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
-            root.addSubview(v)
+            host.addSubview(v)
         }
         let pad = Tokens.Space.sidebarPadding
+        // The footer follows the safe area so it stays clear of the screen's
+        // rounded corners in full screen.
+        let safe = host.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
-            nav.topAnchor.constraint(equalTo: root.topAnchor, constant: 11),
-            nav.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -pad - 4),
-            urlPill.topAnchor.constraint(equalTo: root.topAnchor, constant: 44),
-            urlPill.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: pad),
-            urlPill.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -pad),
+            nav.topAnchor.constraint(equalTo: host.topAnchor, constant: 11),
+            nav.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -pad - 4),
+            urlPill.topAnchor.constraint(equalTo: host.topAnchor, constant: 44),
+            urlPill.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: pad),
+            urlPill.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -pad),
             urlPill.heightAnchor.constraint(equalToConstant: Tokens.Size.urlPill),
-            extensionRow.topAnchor.constraint(equalTo: urlPill.bottomAnchor, constant: 8),
-            extensionRow.leadingAnchor.constraint(equalTo: urlPill.leadingAnchor, constant: 6),
-            extensionRow.heightAnchor.constraint(equalToConstant: 22),
-            favoritesGrid.topAnchor.constraint(equalTo: extensionRow.bottomAnchor, constant: Tokens.Space.sectionGap - 8),
-            favoritesGrid.leadingAnchor.constraint(equalTo: urlPill.leadingAnchor),
-            favoritesGrid.trailingAnchor.constraint(equalTo: urlPill.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: favoritesGrid.bottomAnchor, constant: Tokens.Space.sectionGap),
-            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: pad),
-            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -pad),
-            scroll.bottomAnchor.constraint(equalTo: nowPlayingView.topAnchor, constant: -6),
-            nowPlayingView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: pad),
-            nowPlayingView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -pad),
+            pager.topAnchor.constraint(equalTo: urlPill.bottomAnchor, constant: Tokens.Space.sectionGap),
+            pager.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            pager.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            pager.bottomAnchor.constraint(equalTo: nowPlayingView.topAnchor, constant: -6),
+            nowPlayingView.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: pad),
+            nowPlayingView.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -pad),
             nowPlayingView.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
-            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: pad + 10),
-            footer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -pad - 4),
-            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            footer.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: pad + 10),
+            footer.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -pad - 4),
+            footer.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -12),
             footer.heightAnchor.constraint(equalToConstant: 24),
         ])
         view = host
     }
 
+    // MARK: State
+
     public func apply(_ new: SidebarState) {
+        // Never rebuild mid-gesture: hold the latest state until the swipe ends.
+        if swiping { pendingState = new; return }
         let old = state
         state = new
+        let style = new.style
+        view.appearance = style.tinted ? NSAppearance(named: style.onDark ? .darkAqua : .aqua) : nil
+
         backButton.isEnabled = new.canGoBack
         forwardButton.isEnabled = new.canGoForward
         reloadButton.image = NSImage(systemSymbolName: new.isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: new.isLoading ? "Stop" : "Reload")
-        urlPill.update(host: new.host, secure: new.isSecure, blocker: new.blockerOn, hue: new.accentHue)
-        if old.nowPlaying != new.nowPlaying {
-            if let np = new.nowPlaying { nowPlayingView.update(np, hue: new.accentHue) }
+        urlPill.update(host: new.host, secure: new.isSecure, blocker: new.blockerOn, hue: new.accentHue, style: style)
+
+        if old.nowPlaying != new.nowPlaying || old.style != new.style {
+            if let np = new.nowPlaying { nowPlayingView.update(np, style: style) }
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = Tokens.Motion.duration(0.2)
                 nowPlayingView.animator().isHidden = new.nowPlaying == nil
@@ -263,57 +248,194 @@ public final class SidebarViewController: NSViewController {
         libraryBadge.isHidden = new.activeDownloads == 0
         libraryBadge.stringValue = "\(new.activeDownloads)"
         libraryBadge.layer?.backgroundColor = Tokens.accent(hue: new.accentHue).cgColor
-        libraryButton.contentTintColor = new.activeDownloads > 0 ? Tokens.accent(hue: new.accentHue) : Tokens.secondaryInk
-        if !swiping { wash.layer?.backgroundColor = Tokens.accent(hue: new.accentHue).withAlphaComponent(0.05).cgColor }
-        if old.spaceIndex != new.spaceIndex, !swiping, old.spaceCount == new.spaceCount, !old.spaceNames.isEmpty {
-            slideIn(from: new.spaceIndex > old.spaceIndex ? 1 : -1)
-        }
 
-        if old.favorites != new.favorites || old.selected != new.selected || old.accentHue != new.accentHue || favoritesGrid.arrangedSubviews.isEmpty {
-            rebuildFavorites()
+        // Pages: one live view per space, reused by position.
+        let pagesChanged = old.pages.map(\.id) != new.pages.map(\.id)
+        while pages.count < new.pages.count {
+            let page = SpacePageView()
+            page.owner = self
+            page.onSwipeBegan = { [weak self] event in self?.trackSwipe(event) ?? false }
+            strip.addSubview(page)
+            pages.append(page)
         }
-        if old.spaceIndex != new.spaceIndex || old.spaceCount != new.spaceCount || old.spaceName != new.spaceName || old.accentHue != new.accentHue || spaceDots.arrangedSubviews.isEmpty {
-            rebuildSpaces()
+        while pages.count > new.pages.count { pages.removeLast().removeFromSuperview() }
+        for (i, page) in pages.enumerated() {
+            page.apply(new.pages[i], style: style)
         }
+        if pagesChanged { layoutPages() }
 
-        var items: [Item] = new.pinned.map { .tab($0, .pinned) }
-        items.append(.divider)
-        items.append(.newTab)
-        items += new.today.map { .tab($0, .today) }
-        if items != rows || old.selected != new.selected || old.accentHue != new.accentHue {
-            let sameShape = items.count == rows.count && zip(items, rows).allSatisfy { a, b in
-                if case .tab(let x, _) = a, case .tab(let y, _) = b { return x.id == y.id }
-                return a == b
-            }
-            rows = items
-            if sameShape {
-                table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<rows.count), columnIndexes: [0])
+        rebuildSpaceIndicator()
+
+        // Move to the current space. After a swipe the strip is already there.
+        let target = min(max(0, new.currentIndex), max(0, new.pages.count - 1))
+        if target != displayedIndex {
+            let from = displayedIndex
+            displayedIndex = target
+            if committedBySwipe || pagesChanged || old.pages.isEmpty {
+                placeStrip(at: target)
             } else {
-                table.reloadData()
+                animateStrip(from: from, to: target)
             }
         }
+        committedBySwipe = false
     }
 
-    private func rebuildFavorites() {
-        favoritesGrid.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        favoritesGrid.isHidden = state.favorites.isEmpty
-        for fav in state.favorites.prefix(8) {
-            let tile = FavoriteTile(row: fav, selected: fav.id == state.selected, hue: state.accentHue)
-            tile.onClick = { [weak self] in self?.delegate?.sidebarSelect(fav.id) }
-            tile.menuProvider = { [weak self] in self?.delegate?.sidebarContextMenu(for: fav.id) }
-            favoritesGrid.addArrangedSubview(tile)
+    /// Extension toolbar buttons, shown inside the address pill.
+    public func setExtensionButtons(_ buttons: [NSView]) {
+        urlPill.setAccessories(buttons)
+    }
+
+    /// Kept for callers; pages are live now, so there's nothing to cache.
+    public func cacheCurrentSpaceSnapshot() {}
+
+    private func rebuildSpaceIndicator() {
+        let count = state.pages.count
+        if spaceDots.arrangedSubviews.count != count {
+            spaceDots.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            for i in 0..<count {
+                let dot = SpaceDot()
+                dot.onClick = { [weak self] in self?.delegate?.sidebarSwitchSpace(i) }
+                spaceDots.addArrangedSubview(dot)
+            }
         }
-    }
-
-    private func rebuildSpaces() {
-        spaceDots.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for i in 0..<state.spaceCount {
-            let dot = SpaceDot(on: i == state.spaceIndex, hue: state.accentHue)
-            dot.onClick = { [weak self] in self?.delegate?.sidebarSwitchSpace(i) }
-            spaceDots.addArrangedSubview(dot)
+        for (i, v) in spaceDots.arrangedSubviews.enumerated() {
+            (v as? SpaceDot)?.set(on: i == state.currentIndex, style: state.style)
         }
         spaceLabel.stringValue = state.spaceName
+        spaceDots.isHidden = count < 2
     }
+
+    // MARK: Paging geometry
+
+    private var pageWidth: CGFloat { max(1, pager.bounds.width) }
+
+    private func layoutPages() {
+        let w = pageWidth, h = pager.bounds.height
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (i, page) in pages.enumerated() {
+            page.frame = NSRect(x: CGFloat(i) * w, y: 0, width: w, height: h)
+        }
+        strip.frame = NSRect(x: -CGFloat(displayedIndex) * w, y: 0, width: w * CGFloat(max(1, pages.count)), height: h)
+        CATransaction.commit()
+    }
+
+    private func setStripX(_ x: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        strip.layer?.removeAnimation(forKey: "page")
+        strip.setFrameOrigin(NSPoint(x: x, y: 0))
+        CATransaction.commit()
+    }
+
+    private func placeStrip(at index: Int) {
+        setStripX(-CGFloat(index) * pageWidth)
+        delegate?.sidebarSwipeProgress(from: index, to: index, fraction: 0)
+    }
+
+    /// Keyboard, dot or palette switch: the same page strip slides with a
+    /// critically damped spring (Reduce Motion: a quick cross-fade instead).
+    private func animateStrip(from: Int, to: Int) {
+        let w = pageWidth
+        let startX = strip.layer?.presentation()?.position.x ?? strip.frame.origin.x
+        let endX = -CGFloat(to) * w
+        setStripX(endX)
+        delegate?.sidebarSwipeProgress(from: from, to: to, fraction: -1)   // negative: animate the change
+        guard let layer = strip.layer else { return }
+        if Tokens.Motion.reduceMotion {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0.3; fade.toValue = 1; fade.duration = 0.18
+            layer.add(fade, forKey: "page")
+            return
+        }
+        let spring = CASpringAnimation(keyPath: "position.x")
+        let response = 0.34, damping = 1.0
+        spring.mass = 1
+        spring.stiffness = pow(2 * .pi / response, 2)
+        spring.damping = 4 * .pi * damping / response
+        spring.fromValue = startX
+        spring.toValue = endX
+        spring.duration = spring.settlingDuration
+        layer.add(spring, forKey: "page")
+    }
+
+    // MARK: Swipe between spaces
+
+    /// Interactive two-finger swipe, tracked by the system (rubber-banding and
+    /// the commit decision match Safari). Only the strip's position changes per
+    /// event: no layout, no snapshots, no table reloads.
+    private func trackSwipe(_ event: NSEvent) -> Bool {
+        guard state.pages.count > 1, !swiping else { return false }
+        let index = displayedIndex, count = state.pages.count
+        let w = pageWidth
+        strip.layer?.removeAnimation(forKey: "page")
+        swiping = true
+        var warmed = false
+        // gestureAmount > 0 is a swipe to the right, which reveals the space on the left.
+        event.trackSwipeEvent(options: [.lockDirection, .clampGestureAmount],
+                              dampenAmountThresholdMin: -CGFloat(count - 1 - index), max: CGFloat(index)) { [weak self] amount, _, complete, _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.setStripX((-CGFloat(index) + amount) * w)
+                let neighbour = amount > 0 ? index - 1 : index + 1
+                if neighbour >= 0, neighbour < count {
+                    self.delegate?.sidebarSwipeProgress(from: index, to: neighbour, fraction: min(1, Double(abs(amount))))
+                }
+                if !warmed, abs(amount) > 0.3, neighbour >= 0, neighbour < count {
+                    warmed = true
+                    self.delegate?.sidebarWillSwipe(toSpace: neighbour)
+                }
+                if complete {
+                    let target = amount > 0.5 ? index - 1 : (amount < -0.5 ? index + 1 : index)
+                    self.finishSwipe(to: target)
+                }
+            }
+        }
+        return true
+    }
+
+    private func finishSwipe(to target: Int) {
+        swiping = false
+        displayedIndex = target
+        placeStrip(at: target)
+        if target != state.currentIndex {
+            committedBySwipe = true
+            delegate?.sidebarSwitchSpace(target)
+        }
+        if let pending = pendingState {
+            pendingState = nil
+            apply(pending)
+        }
+    }
+
+    // MARK: Debug driving (benchmarks only)
+
+    /// Drives the same code path as a real swipe, without an NSEvent: begin,
+    /// per-frame amounts, then finish. Used by the swipe benchmark.
+    public func debugSwipeBegin() -> Bool {
+        guard state.pages.count > 1, !swiping else { return false }
+        strip.layer?.removeAnimation(forKey: "page")
+        swiping = true
+        return true
+    }
+
+    public func debugSwipe(amount: CGFloat) {
+        let index = displayedIndex, count = state.pages.count, w = pageWidth
+        setStripX((-CGFloat(index) + amount) * w)
+        let neighbour = amount > 0 ? index - 1 : index + 1
+        if neighbour >= 0, neighbour < count {
+            delegate?.sidebarSwipeProgress(from: index, to: neighbour, fraction: min(1, Double(abs(amount))))
+        }
+    }
+
+    public func debugSwipeEnd(amount: CGFloat) {
+        let index = displayedIndex
+        finishSwipe(to: amount > 0.5 ? index - 1 : (amount < -0.5 ? index + 1 : index))
+    }
+
+    public var debugCurrentIndex: Int { displayedIndex }
+
+    // MARK: Actions
 
     @objc private func back() { delegate?.sidebarBack() }
     @objc private func forward() { delegate?.sidebarForward() }
@@ -321,147 +443,8 @@ public final class SidebarViewController: NSViewController {
     @objc private func newTabClicked() { delegate?.sidebarNewTab() }
     @objc private func libraryClicked() { delegate?.sidebarOpenLibrary(from: libraryButton) }
 
-    /// Extension toolbar buttons, shown under the address pill.
-    public func setExtensionButtons(_ buttons: [NSView]) {
-        // Same buttons in the same order: leave them in place (moving an
-        // anchor view closes any popover shown from it).
-        if extensionRow.arrangedSubviews.count == buttons.count,
-           zip(extensionRow.arrangedSubviews, buttons).allSatisfy({ $0 === $1 }) { return }
-        extensionRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        buttons.forEach(extensionRow.addArrangedSubview)
-        extensionRow.isHidden = buttons.isEmpty
-    }
-
-    // MARK: Swipe between spaces
-
-    /// Remembers how the current space looks, so swiping back to it can show it.
-    public func cacheCurrentSpaceSnapshot() {
-        guard content.bounds.width > 0, let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return }
-        content.cacheDisplay(in: content.bounds, to: rep)
-        let image = NSImage(size: content.bounds.size)
-        image.addRepresentation(rep)
-        snapshots[state.spaceIndex] = image
-    }
-
-    private func neighbourImage(_ index: Int) -> NSImage? {
-        guard index >= 0, index < state.spaceCount else { return nil }
-        if let cached = snapshots[index], cached.size == content.bounds.size { return cached }
-        // Never visited this session: a quiet placeholder with the space's name.
-        let size = content.bounds.size
-        let name = index < state.spaceNames.count ? state.spaceNames[index] : "Space \(index + 1)"
-        let hue = index < state.spaceHues.count ? state.spaceHues[index] : state.accentHue
-        return NSImage(size: size, flipped: true) { _ in
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 15, weight: .semibold), .foregroundColor: Tokens.accent(hue: hue)]
-            (name as NSString).draw(at: NSPoint(x: 20, y: 52), withAttributes: attrs)
-            NSColor.tertiaryLabelColor.withAlphaComponent(0.25).setFill()
-            for row in 0..<6 {
-                NSBezierPath(roundedRect: NSRect(x: 20, y: 96 + CGFloat(row) * 34, width: size.width * [0.6, 0.45, 0.7, 0.5, 0.65, 0.4][row], height: 8), xRadius: 4, yRadius: 4).fill()
-            }
-            return true
-        }
-    }
-
-    /// Interactive two-finger swipe, tracked by the system (rubber-banding and
-    /// the commit decision match Safari and Finder). Layers move; nothing lays out.
-    private func trackSwipe(_ event: NSEvent) -> Bool {
-        guard state.spaceCount > 1, !swiping else { return false }
-        let index = state.spaceIndex, count = state.spaceCount
-        let width = content.bounds.width
-        cacheCurrentSpaceSnapshot()
-        leftPane.image = neighbourImage(index - 1)
-        rightPane.image = neighbourImage(index + 1)
-        leftPane.isHidden = leftPane.image == nil
-        rightPane.isHidden = rightPane.image == nil
-        swiping = true
-        let fromHue = state.accentHue
-        var warmed = false
-        // gestureAmount > 0 means a swipe to the right, which reveals the space on the left.
-        event.trackSwipeEvent(options: [.lockDirection, .clampGestureAmount],
-                              dampenAmountThresholdMin: -CGFloat(count - 1 - index), max: CGFloat(index)) { [weak self] amount, phase, complete, _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                let p = amount
-                self.setSwipeOffset(p * width, fromHue: fromHue)
-                if !warmed, abs(p) > 0.35 {
-                    warmed = true
-                    self.delegate?.sidebarWillSwipe(toSpace: p > 0 ? index - 1 : index + 1)
-                }
-                if complete {
-                    let target = p > 0.5 ? index - 1 : (p < -0.5 ? index + 1 : index)
-                    self.finishSwipe(to: target)
-                }
-                _ = phase
-            }
-        }
-        return true
-    }
-
-    private func setSwipeOffset(_ x: CGFloat, fromHue: Double) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        let t = CATransform3DMakeTranslation(x, 0, 0)
-        content.layer?.transform = t
-        leftPane.layer?.transform = t
-        rightPane.layer?.transform = t
-        // Cross-fade the space tint with the distance travelled.
-        let w = max(1, content.bounds.width)
-        let neighbour = x > 0 ? state.spaceIndex - 1 : state.spaceIndex + 1
-        if neighbour >= 0, neighbour < state.spaceHues.count {
-            let f = min(1, abs(x) / w)
-            let a = Tokens.accent(hue: fromHue).withAlphaComponent(0.05 * (1 - f))
-            let b = Tokens.accent(hue: state.spaceHues[neighbour]).withAlphaComponent(0.05 * f)
-            wash.layer?.backgroundColor = (a.blended(withFraction: f, of: b) ?? a).cgColor
-        }
-        CATransaction.commit()
-    }
-
-    private func finishSwipe(to target: Int) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for v in [content, leftPane, rightPane] { v.layer?.transform = CATransform3DIdentity }
-        leftPane.isHidden = true
-        rightPane.isHidden = true
-        CATransaction.commit()
-        swiping = false
-        if target != state.spaceIndex { delegate?.sidebarSwitchSpace(target) }
-    }
-
-    /// Keyboard or dot switch: the new space slides in with a spring (or fades
-    /// with Reduce Motion), matching the swipe's direction.
-    private func slideIn(from direction: CGFloat) {
-        guard let layer = content.layer else { return }
-        if Tokens.Motion.reduceMotion {
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.18
-            layer.add(fade, forKey: "spaceFade")
-            return
-        }
-        let spring = CASpringAnimation(keyPath: "transform.translation.x")
-        let response = 0.32, damping = 1.0
-        spring.mass = 1
-        spring.stiffness = pow(2 * .pi / response, 2)
-        spring.damping = 4 * .pi * damping / response
-        spring.fromValue = direction * content.bounds.width * 0.35
-        spring.toValue = 0
-        spring.duration = spring.settlingDuration
-        layer.add(spring, forKey: "spaceSlide")
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0.4; fade.toValue = 1; fade.duration = 0.22
-        layer.add(fade, forKey: "spaceFade")
-    }
-
-    @objc private func rowClicked() {
-        let row = table.clickedRow
-        guard row >= 0, row < rows.count else { return }
-        switch rows[row] {
-        case .tab(let r, _): delegate?.sidebarSelect(r.id)
-        case .newTab: delegate?.sidebarNewTab()
-        case .divider: break
-        }
-    }
-
     static func iconButton(_ symbol: String, _ label: String) -> NSButton {
-        let b = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: nil, action: nil)
+        let b = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label) ?? NSImage(), target: nil, action: nil)
         b.isBordered = false
         b.bezelStyle = .accessoryBarAction
         b.imageScaling = .scaleProportionallyDown
@@ -474,36 +457,164 @@ public final class SidebarViewController: NSViewController {
     }
 }
 
-// MARK: - Table
+/// Clips the page strip and reports size changes (pages are laid out by frame).
+final class PagerClipView: NSView {
+    var onLayout: (() -> Void)?
+    private var lastSize: NSSize = .zero
+    override func layout() {
+        super.layout()
+        if bounds.size != lastSize { lastSize = bounds.size; onLayout?() }
+    }
+}
 
-extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
-    public func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+// MARK: - One space's page
 
-    public func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        if case .divider = rows[row] { return 26 }
-        return Tokens.Size.tabRow
+/// A space's favorites grid and tab list. Each space has its own live page,
+/// so swiping shows the real neighbouring space, not a picture of it.
+@MainActor
+final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
+    weak var owner: SidebarViewController?
+    var onSwipeBegan: ((NSEvent) -> Bool)? {
+        didSet { scroll.onSwipeBegan = onSwipeBegan }
+    }
+    private var delegate: SidebarDelegate? { owner?.delegate }
+    private let favoritesGrid = NSStackView()
+    private let table = SidebarTableView()
+    private let scroll = SwipeAwareScrollView()
+    private var page = SidebarState.Page(id: UUID(), name: "", theme: .from(hue: 0.48))
+    private var style = SidebarStyle()
+    private var rows: [Item] = []
+    private var gridHeight: NSLayoutConstraint!
+
+    enum Item: Equatable {
+        case tab(SidebarState.Row, TabTier)
+        case divider
+        case newTab
     }
 
-    public func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+    init() {
+        super.init(frame: .zero)
+        favoritesGrid.orientation = .horizontal
+        favoritesGrid.distribution = .fillEqually
+        favoritesGrid.spacing = 8
+        favoritesGrid.alignment = .top
+        table.headerView = nil
+        table.backgroundColor = .clear
+        table.intercellSpacing = NSSize(width: 0, height: Tokens.Space.tabGap)
+        table.style = .plain
+        table.selectionHighlightStyle = .none
+        table.addTableColumn(NSTableColumn(identifier: .init("tab")))
+        table.dataSource = self
+        table.delegate = self
+        table.target = self
+        table.action = #selector(rowClicked)
+        table.registerForDraggedTypes([.aegisTab])
+        table.setDraggingSourceOperationMask(.move, forLocal: true)
+        table.menuProvider = { [weak self] row in
+            guard let self, row >= 0, row < self.rows.count, case .tab(let r, _) = self.rows[row] else { return nil }
+            return self.delegate?.sidebarContextMenu(for: r.id)
+        }
+        scroll.documentView = table
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.horizontalScrollElasticity = .none
+        scroll.automaticallyAdjustsContentInsets = false
+        for v in [favoritesGrid, scroll] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        let pad = Tokens.Space.sidebarPadding
+        gridHeight = favoritesGrid.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            favoritesGrid.topAnchor.constraint(equalTo: topAnchor),
+            favoritesGrid.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
+            favoritesGrid.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
+            gridHeight,
+            scroll.topAnchor.constraint(equalTo: favoritesGrid.bottomAnchor, constant: 0),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func apply(_ new: SidebarState.Page, style newStyle: SidebarStyle) {
+        let old = page, oldStyle = style
+        page = new
+        style = newStyle
+        if old.favorites != new.favorites || old.selected != new.selected || oldStyle != newStyle || favoritesGrid.arrangedSubviews.count != min(8, new.favorites.count) {
+            favoritesGrid.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            for fav in new.favorites.prefix(8) {
+                let tile = FavoriteTile(row: fav, selected: fav.id == new.selected, style: newStyle)
+                tile.onClick = { [weak self] in self?.delegate?.sidebarSelect(fav.id) }
+                tile.menuProvider = { [weak self] in self?.delegate?.sidebarContextMenu(for: fav.id) }
+                favoritesGrid.addArrangedSubview(tile)
+            }
+            gridHeight.constant = new.favorites.isEmpty ? 0 : Tokens.Size.favoriteTile + Tokens.Space.sectionGap
+        }
+        var items: [Item] = new.pinned.map { .tab($0, .pinned) }
+        items.append(.divider)
+        items.append(.newTab)
+        items += new.today.map { .tab($0, .today) }
+        guard items != rows || old.selected != new.selected || oldStyle != newStyle else { return }
+        let sameShape = items.count == rows.count && zip(items, rows).allSatisfy { a, b in
+            if case .tab(let x, _) = a, case .tab(let y, _) = b { return x.id == y.id }
+            return a == b
+        }
+        rows = items
+        table.rowHeight = newStyle.rowHeight
+        if sameShape && oldStyle == newStyle {
+            table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<rows.count), columnIndexes: [0])
+        } else {
+            table.reloadData()
+        }
+    }
+
+    // Swipes that start over the empty part of a page.
+    override func scrollWheel(with event: NSEvent) {
+        if SwipeHostView.isSwipeStart(event), onSwipeBegan?(event) == true { return }
+        super.scrollWheel(with: event)
+    }
+
+    @objc private func rowClicked() {
+        let row = table.clickedRow
+        guard row >= 0, row < rows.count else { return }
+        switch rows[row] {
+        case .tab(let r, _): delegate?.sidebarSelect(r.id)
+        case .newTab: delegate?.sidebarNewTab()
+        case .divider: break
+        }
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if case .divider = rows[row] { return 26 }
+        return style.rowHeight
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         switch rows[row] {
         case .divider:
-            let v = tableView.makeView(withIdentifier: DividerCell.id, owner: nil) as? DividerCell ?? DividerCell()
-            return v
+            return tableView.makeView(withIdentifier: DividerCell.id, owner: nil) as? DividerCell ?? DividerCell()
         case .newTab:
             let v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
-            v.configureNewTab()
+            v.configureNewTab(style: style)
             return v
         case .tab(let r, _):
             let v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
-            v.configure(r, selected: r.id == state.selected, hue: state.accentHue)
+            v.configure(r, selected: r.id == page.selected, style: style)
             v.onClose = { [weak self] in self?.delegate?.sidebarClose(r.id) }
             return v
         }
     }
 
-    public func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
 
-    public func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
         guard case .tab(let r, _) = rows[row] else { return nil }
         let item = NSPasteboardItem()
         item.setString(r.id.description, forType: .aegisTab)
@@ -511,12 +622,12 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         return item
     }
 
-    public func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int, proposedDropOperation op: NSTableView.DropOperation) -> NSDragOperation {
+    func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int, proposedDropOperation op: NSTableView.DropOperation) -> NSDragOperation {
         tableView.setDropRow(row, dropOperation: .above)
         return info.draggingPasteboard.string(forType: .aegisTab) == nil ? [] : .move
     }
 
-    public func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
+    func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
         guard let raw = info.draggingPasteboard.string(forType: .aegisTab), let uuid = UUID(uuidString: raw) else { return false }
         let id = TabID(uuid)
         // Rows above the divider are pinned; below "New Tab" are today's.
@@ -554,6 +665,8 @@ final class TabCell: NSTableCellView {
     private let background = NSView()
     private var tracking: NSTrackingArea?
     private var currentURL: URL?
+    private var selected = false
+    private var style = SidebarStyle()
     var onClose: (() -> Void)?
 
     init() {
@@ -562,7 +675,6 @@ final class TabCell: NSTableCellView {
         background.wantsLayer = true
         background.layer?.cornerRadius = Tokens.Radius.tabRow
         background.layer?.cornerCurve = .continuous
-        label.font = .systemFont(ofSize: 13)
         label.lineBreakMode = .byTruncatingTail
         label.cell?.truncatesLastVisibleLine = true
         icon.imageScaling = .scaleProportionallyUpOrDown
@@ -603,12 +715,17 @@ final class TabCell: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ row: SidebarState.Row, selected: Bool, hue: Double) {
+    func configure(_ row: SidebarState.Row, selected: Bool, style: SidebarStyle) {
+        self.selected = selected
+        self.style = style
         label.stringValue = row.title
-        label.textColor = selected ? Tokens.accent(hue: hue) : .labelColor
-        label.font = .systemFont(ofSize: 13, weight: selected ? .medium : .regular)
-        background.layer?.backgroundColor = selected ? Tokens.selectionFill(hue: hue).cgColor : NSColor.clear.cgColor
-        alphaValue = row.sleeping && !selected ? 0.55 : 1
+        label.textColor = .labelColor
+        label.font = .systemFont(ofSize: style.fontSize, weight: selected ? .semibold : .regular)
+        background.layer?.backgroundColor = selected ? style.selectionFill.cgColor : NSColor.clear.cgColor
+        background.layer?.shadowOpacity = selected && style.tinted && !style.onDark ? 0.08 : 0
+        background.layer?.shadowRadius = 2
+        background.layer?.shadowOffset = CGSize(width: 0, height: -1)
+        alphaValue = row.sleeping && !selected ? 0.6 : 1
         audio.isHidden = !row.playing
         toolTip = row.sleeping ? "\(row.title) — sleeping" : row.title
         setAccessibilityLabel(row.title)
@@ -625,11 +742,14 @@ final class TabCell: NSTableCellView {
         closeButton.isHidden = true
     }
 
-    func configureNewTab() {
+    func configureNewTab(style: SidebarStyle) {
+        selected = false
+        self.style = style
         label.stringValue = "New Tab"
         label.textColor = Tokens.secondaryInk
-        label.font = .systemFont(ofSize: 13)
+        label.font = .systemFont(ofSize: style.fontSize)
         background.layer?.backgroundColor = NSColor.clear.cgColor
+        background.layer?.shadowOpacity = 0
         icon.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
         icon.contentTintColor = Tokens.secondaryInk
         audio.isHidden = true
@@ -647,8 +767,14 @@ final class TabCell: NSTableCellView {
         tracking = area
     }
 
-    override func mouseEntered(with event: NSEvent) { closeButton.isHidden = onClose == nil }
-    override func mouseExited(with event: NSEvent) { closeButton.isHidden = true }
+    override func mouseEntered(with event: NSEvent) {
+        closeButton.isHidden = onClose == nil
+        if !selected { background.layer?.backgroundColor = style.quietFill.withAlphaComponent(style.onDark ? 0.06 : 0.22).cgColor }
+    }
+    override func mouseExited(with event: NSEvent) {
+        closeButton.isHidden = true
+        if !selected { background.layer?.backgroundColor = NSColor.clear.cgColor }
+    }
     override func otherMouseUp(with event: NSEvent) { if event.buttonNumber == 2 { onClose?() } }
     @objc private func closeClicked() { onClose?() }
 }
@@ -675,11 +801,14 @@ final class DividerCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// The compact address: shield, host, blocked state. Clicking opens the palette.
+/// The compact address: shield, host, then pinned extension buttons at the
+/// trailing edge. Clicking the address opens the palette.
 final class URLPill: NSView {
     var onClick: (() -> Void)?
     private let shield = NSImageView()
     private let host = NSTextField(labelWithString: "")
+    private let accessories = NSStackView()
+    private var style = SidebarStyle()
 
     init() {
         super.init(frame: .zero)
@@ -690,13 +819,18 @@ final class URLPill: NSView {
         host.font = .systemFont(ofSize: 12.5)
         host.lineBreakMode = .byTruncatingMiddle
         host.textColor = .labelColor
-        for v in [shield, host] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        accessories.orientation = .horizontal
+        accessories.spacing = 2
+        for v in [shield, host, accessories] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        host.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
             shield.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             shield.centerYAnchor.constraint(equalTo: centerYAnchor),
             host.leadingAnchor.constraint(equalTo: shield.trailingAnchor, constant: 8),
-            host.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            host.trailingAnchor.constraint(lessThanOrEqualTo: accessories.leadingAnchor, constant: -6),
             host.centerYAnchor.constraint(equalTo: centerYAnchor),
+            accessories.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+            accessories.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         setAccessibilityRole(.button)
         setAccessibilityLabel("Address. Click to search or enter a URL.")
@@ -705,23 +839,38 @@ final class URLPill: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func update(host text: String, secure: Bool, blocker: Bool, hue: Double) {
+    func update(host text: String, secure: Bool, blocker: Bool, hue: Double, style: SidebarStyle) {
+        self.style = style
         host.stringValue = text.isEmpty ? "Search or enter address" : text
         host.textColor = text.isEmpty ? Tokens.secondaryInk : .labelColor
         let symbol = !secure && !text.isEmpty ? "exclamationmark.shield" : (blocker ? "checkmark.shield" : "shield")
         shield.image = NSImage(systemSymbolName: symbol, accessibilityDescription: secure ? "Secure" : "Not secure")
-        shield.contentTintColor = !secure && !text.isEmpty ? .systemOrange : Tokens.accent(hue: hue)
+        shield.contentTintColor = !secure && !text.isEmpty ? .systemOrange : (style.tinted ? .labelColor : Tokens.accent(hue: hue))
         needsDisplay = true
+    }
+
+    /// Same buttons in the same order stay put (moving an anchor view closes
+    /// any popover shown from it).
+    func setAccessories(_ views: [NSView]) {
+        if accessories.arrangedSubviews.count == views.count,
+           zip(accessories.arrangedSubviews, views).allSatisfy({ $0 === $1 }) { return }
+        accessories.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        views.forEach(accessories.addArrangedSubview)
     }
 
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.6).cgColor
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.4).cgColor
+        layer?.backgroundColor = style.pillFill.cgColor
+        layer?.borderColor = style.hairline.cgColor
         layer?.borderWidth = 0.5
     }
 
-    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        // Clicks on an extension button go to the button, not the palette.
+        let p = convert(event.locationInWindow, from: nil)
+        if accessories.frame.contains(p), !accessories.arrangedSubviews.isEmpty { return }
+        onClick?()
+    }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .iBeam) }
 }
 
@@ -729,11 +878,11 @@ final class FavoriteTile: NSView {
     var onClick: (() -> Void)?
     var menuProvider: (() -> NSMenu?)?
     private let selected: Bool
-    private let hue: Double
+    private let style: SidebarStyle
 
-    init(row: SidebarState.Row, selected: Bool, hue: Double) {
+    init(row: SidebarState.Row, selected: Bool, style: SidebarStyle) {
         self.selected = selected
-        self.hue = hue
+        self.style = style
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = Tokens.Radius.tile
@@ -753,15 +902,15 @@ final class FavoriteTile: NSView {
         toolTip = row.title
         setAccessibilityRole(.button)
         setAccessibilityLabel(row.title)
-        alphaValue = row.sleeping && !selected ? 0.7 : 1
+        alphaValue = row.sleeping && !selected ? 0.75 : 1
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        layer?.backgroundColor = (selected ? Tokens.selectionFill(hue: hue) : NSColor.controlBackgroundColor.withAlphaComponent(0.55)).cgColor
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
+        layer?.backgroundColor = (selected ? style.selectionFill : style.quietFill).cgColor
+        layer?.borderColor = style.hairline.cgColor
         layer?.borderWidth = 0.5
     }
 
@@ -771,24 +920,25 @@ final class FavoriteTile: NSView {
 
 final class SpaceDot: NSView {
     var onClick: (() -> Void)?
-    private let on: Bool
-    private let hue: Double
-    init(on: Bool, hue: Double) {
-        self.on = on
-        self.hue = hue
+    private var on = false
+    init() {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 4
+        layer?.cornerRadius = 3.5
         translatesAutoresizingMaskIntoConstraints = false
-        widthAnchor.constraint(equalToConstant: 8).isActive = true
-        heightAnchor.constraint(equalToConstant: 8).isActive = true
+        widthAnchor.constraint(equalToConstant: 7).isActive = true
+        heightAnchor.constraint(equalToConstant: 7).isActive = true
         setAccessibilityRole(.button)
-        setAccessibilityLabel(on ? "Current space" : "Switch space")
     }
     required init?(coder: NSCoder) { fatalError() }
+    func set(on: Bool, style: SidebarStyle) {
+        self.on = on
+        setAccessibilityLabel(on ? "Current space" : "Switch space")
+        needsDisplay = true
+    }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        layer?.backgroundColor = (on ? Tokens.accent(hue: hue) : NSColor.tertiaryLabelColor).cgColor
+        layer?.backgroundColor = (on ? NSColor.labelColor : NSColor.tertiaryLabelColor).cgColor
     }
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
@@ -829,7 +979,7 @@ final class NowPlayingStrip: NSView {
     private let host = NSTextField(labelWithString: "")
     private let play = SidebarViewController.iconButton("pause.fill", "Pause")
     private let pip = SidebarViewController.iconButton("pip.enter", "Picture in Picture")
-    private var hue = 0.48
+    private var style = SidebarStyle()
 
     init() {
         super.init(frame: .zero)
@@ -865,8 +1015,8 @@ final class NowPlayingStrip: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func update(_ np: NowPlaying, hue: Double) {
-        self.hue = hue
+    func update(_ np: NowPlaying, style: SidebarStyle) {
+        self.style = style
         title.stringValue = np.title
         host.stringValue = np.url?.host() ?? ""
         icon.image = Favicons.shared.cached(for: np.url) ?? Favicons.placeholder()
@@ -878,7 +1028,7 @@ final class NowPlayingStrip: NSView {
 
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        layer?.backgroundColor = Tokens.selectionFill(hue: hue).cgColor
+        layer?.backgroundColor = style.selectionFill.cgColor
     }
 
     override func mouseDown(with event: NSEvent) { onOpen?() }

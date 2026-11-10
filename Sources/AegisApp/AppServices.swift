@@ -21,6 +21,17 @@ final class AppServices {
     let blocking = BlockingAdapter()
     let extensions = ExtensionHost()
     var privacy = PrivacySettings()
+    /// App-wide look (Settings → Appearance). Windows re-theme on change.
+    var appearance: AppearanceSettings = {
+        guard let data = UserDefaults.standard.data(forKey: "appearance"),
+              let a = try? JSONDecoder().decode(AppearanceSettings.self, from: data) else { return AppearanceSettings() }
+        return a
+    }() {
+        didSet {
+            if let data = try? JSONEncoder().encode(appearance) { UserDefaults.standard.set(data, forKey: "appearance") }
+            applyAppearance()
+        }
+    }
     let dnsProxy = EncryptedDNSProxy(resolver: EncryptedDNSProxy.Resolver(rawValue: UserDefaults.standard.string(forKey: "dohResolver") ?? "") ?? .quad9)
     private var controllers: [BrowserWindowController] = []
     private var saveTimer: Timer?
@@ -89,6 +100,15 @@ final class AppServices {
     var privateProfiles: Set<UUID> = []
 
     func forEachController(_ body: (BrowserWindowController) -> Void) { controllers.forEach(body) }
+
+    func applyAppearance() {
+        switch appearance.mode {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+        controllers.forEach { $0.applyTheme(animated: true) }
+    }
 
     func windowClosed(_ c: BrowserWindowController) {
         controllers.removeAll { $0 === c }

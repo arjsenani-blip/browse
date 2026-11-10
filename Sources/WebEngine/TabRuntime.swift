@@ -45,6 +45,9 @@ public final class TabRuntime {
 
     public func reloadRules() { contexts.values.forEach { $0.reloadRules() } }
 
+    /// The live tab if one exists; never creates one (cheap, for drawing).
+    public func existingTab(_ id: TabID) -> WebTab? { tabs[id] }
+
     /// The live tab for an ID, creating (but not waking) it if needed.
     public func tab(_ id: TabID) -> WebTab? {
         if let t = tabs[id] { return t }

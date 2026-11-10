@@ -143,6 +143,20 @@ public final class BrowserStore {
         return removed
     }
 
+    public func setTheme(_ theme: SpaceTheme, for id: UUID) {
+        mutateSpace(id) { space in
+            space.theme = theme
+            space.accentHue = theme.top.mixed(with: theme.bottom, 0.5).hue
+        }
+    }
+
+    /// Reorders spaces (Settings → Spaces drag).
+    public func moveSpace(from: Int, to: Int) {
+        guard spaces.indices.contains(from), to >= 0, to <= spaces.count else { return }
+        let s = spaces.remove(at: from)
+        spaces.insert(s, at: min(to, spaces.count))
+    }
+
     public func setArchiveInterval(_ seconds: TimeInterval) {
         for i in spaces.indices { spaces[i].archiveAfter = seconds }
     }

@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import BrowserCore
 
 /// Development aid: `Aegis --snapshot out.png [--open URL] [--palette query]`
 /// renders the front window (chrome via cacheDisplay, the page via
@@ -62,6 +63,22 @@ enum DebugSnapshot {
                 c.window?.makeKeyAndOrderFront(nil)
                 let tab = c.store.currentSpace.selected.flatMap { c.runtime.tab($0) }.map { services.extensionTab($0) }
                 services.extensions.performAction(for: first.id, tab: tab)
+            }
+            if args.contains("--swipe-benchmark"), let c = services.frontController {
+                // Make sure there are three themed spaces with a tab each.
+                let presets = SpaceTheme.presets
+                while services.store.spaces.count < 3 {
+                    let sp = services.store.addSpace(name: "Bench \(services.store.spaces.count + 1)", accentHue: 0.6, newProfile: false)
+                    services.store.setTheme(presets[services.store.spaces.count % presets.count].theme, for: sp.id)
+                    services.store.openTab(URL(string: "https://example.com"), select: true, in: sp.id)
+                }
+                services.store.currentSpaceID = services.store.spaces[0].id
+                c.refresh()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    let bench = SwipeBenchmark(controller: c) { }
+                    objc_setAssociatedObject(c, "bench", bench, .OBJC_ASSOCIATION_RETAIN)
+                    bench.run()
+                }
             }
             if args.contains("--playall") {
                 for space in services.store.spaces { for id in space.allTabs { services.runtime.tab(id)?.togglePlayback() } }

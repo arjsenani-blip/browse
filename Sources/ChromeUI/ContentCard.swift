@@ -16,9 +16,10 @@ public final class ContentCard: NSView {
         wantsLayer = true
         layer?.cornerRadius = Tokens.Radius.contentCard
         layer?.cornerCurve = .continuous
-        layer?.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0 : 0.10
-        layer?.shadowRadius = 3
-        layer?.shadowOffset = CGSize(width: 0, height: -1)
+        // Lifted off the coloured frame: a soft ambient shadow plus a tight contact one.
+        layer?.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0 : 0.22
+        layer?.shadowRadius = 14
+        layer?.shadowOffset = CGSize(width: 0, height: -6)
         clip.wantsLayer = true
         clip.layer?.cornerRadius = Tokens.Radius.contentCard
         clip.layer?.cornerCurve = .continuous
@@ -49,8 +50,15 @@ public final class ContentCard: NSView {
     }
 
     /// Shows a view in the card, replacing the previous one.
-    public func show(_ view: NSView?, snapshot: NSImage? = nil) {
+    public func show(_ view: NSView?, snapshot: NSImage? = nil, crossfade: Bool = false) {
         if current === view { return }
+        if crossfade, !Tokens.Motion.reduceMotion {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.18
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            clip.layer?.add(fade, forKey: "swap")
+        }
         current?.removeFromSuperview()
         current = view
         emptyView.isHidden = view != nil
@@ -82,6 +90,11 @@ public final class ContentCard: NSView {
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated { self?.snapshotView.isHidden = true }
         })
+    }
+
+    public func setCornerRadius(_ r: CGFloat) {
+        layer?.cornerRadius = r
+        clip.layer?.cornerRadius = r
     }
 
     public func setProgress(_ value: Double, loading: Bool, hue: Double) {

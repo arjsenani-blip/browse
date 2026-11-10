@@ -1,0 +1,41 @@
+/* Themed direction: the space's gradient IS the window frame (Lagoon preset).
+   Sidebar sits directly on it, text keyed to the gradient; the page is the
+   only opaque surface, lifted by a soft shadow. Fine grain over the colour. */
+.at-stage .ss-stage {
+  --ab-side-ink: #10302d;
+  --ab-side-faint: rgba(16, 48, 45, 0.55);
+  --ab-tab-active: rgba(255, 255, 255, 0.55);
+  --ab-tab-active-ink: #0b2b28;
+  --ab-tile: rgba(255, 255, 255, 0.38);
+  --ab-tile-line: rgba(255, 255, 255, 0.35);
+  --ab-url: rgba(255, 255, 255, 0.5);
+  --ab-card-shadow: 0 0 0 0.5px rgba(0, 40, 40, 0.18), 0 12px 32px -10px rgba(0, 40, 50, 0.35), 0 2px 6px rgba(0, 40, 50, 0.12);
+}
+.at-stage .ab-window {
+  background: linear-gradient(180deg, #9fe0d6 0%, #5cb3c7 100%);
+}
+.at-stage .ab-window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.16;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+.at-stage .ab-window .ss-window__side,
+.at-stage .ab-window[data-side="floating"] .ss-window__side {
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.at-stage .ab-window[data-kind="sidebar"] .ss-window__main {
+  margin: 10px 10px 0 4px;
+  border-radius: 14px 14px 0 0;
+}
+.at-stage .ab-tab[data-active] {
+  box-shadow: 0 1px 2px rgba(0, 40, 40, 0.12);
+}
+.at-stage .ab-spaces__dot[data-on] { background: #0b2b28; }
+.at-stage .ab-url__shield { color: #0b5f57; }

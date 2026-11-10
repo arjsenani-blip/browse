@@ -92,6 +92,9 @@ public struct Space: Codable, Sendable, Identifiable, Equatable {
     public var selected: TabID?
     /// Today tabs untouched this long are archived. Default 24 h; user-adjustable.
     public var archiveAfter: TimeInterval
+    /// The space's gradient. nil (older sessions) derives one from `accentHue`.
+    public var theme: SpaceTheme?
+    public var resolvedTheme: SpaceTheme { theme ?? .from(hue: accentHue) }
 
     public init(
         id: UUID = UUID(),

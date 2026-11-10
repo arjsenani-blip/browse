@@ -72,7 +72,7 @@ public final class TopTabBar: NSView {
         back.isEnabled = new.canGoBack
         forward.isEnabled = new.canGoForward
         reload.image = NSImage(systemSymbolName: new.isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: nil)
-        pill.update(host: new.host, secure: new.isSecure, blocker: new.blockerOn, hue: new.accentHue)
+        pill.update(host: new.host, secure: new.isSecure, blocker: new.blockerOn, hue: new.accentHue, style: new.style)
         guard old.favorites != new.favorites || old.pinned != new.pinned || old.today != new.today
                 || old.selected != new.selected || old.accentHue != new.accentHue || strip.arrangedSubviews.isEmpty else { return }
         strip.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -89,7 +89,7 @@ public final class TopTabBar: NSView {
     }
 
     private func chip(_ row: SidebarState.Row, compact: Bool) -> TabChip {
-        let c = TabChip(row: row, selected: row.id == state.selected, hue: state.accentHue, compact: compact)
+        let c = TabChip(row: row, selected: row.id == state.selected, hue: state.accentHue, compact: compact, fill: state.style.selectionFill)
         c.onSelect = { [weak self] in self?.delegate?.sidebarSelect(row.id) }
         c.onClose = { [weak self] in self?.delegate?.sidebarClose(row.id) }
         c.menuProvider = { [weak self] in self?.delegate?.sidebarContextMenu(for: row.id) }
@@ -116,8 +116,11 @@ final class TabChip: NSView {
     private let close = NSButton()
     private var tracking: NSTrackingArea?
 
-    init(row: SidebarState.Row, selected: Bool, hue: Double, compact: Bool) {
+    private let fill: NSColor
+
+    init(row: SidebarState.Row, selected: Bool, hue: Double, compact: Bool, fill: NSColor) {
         id = row.id
+        self.fill = fill
         self.selected = selected
         self.hue = hue
         super.init(frame: .zero)
@@ -129,7 +132,7 @@ final class TabChip: NSView {
         if Favicons.shared.cached(for: row.url) == nil { Favicons.shared.load(for: row.url) { if let i = $0 { icon.image = i } } }
         let label = NSTextField(labelWithString: row.title)
         label.font = .systemFont(ofSize: 12, weight: selected ? .medium : .regular)
-        label.textColor = selected ? Tokens.accent(hue: hue) : .labelColor
+        label.textColor = .labelColor
         label.lineBreakMode = .byTruncatingTail
         label.isHidden = compact
         close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Tab")
@@ -173,7 +176,7 @@ final class TabChip: NSView {
 
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        layer?.backgroundColor = (selected ? Tokens.selectionFill(hue: hue) : .clear).cgColor
+        layer?.backgroundColor = (selected ? fill : .clear).cgColor
     }
 
     override func updateTrackingAreas() {
