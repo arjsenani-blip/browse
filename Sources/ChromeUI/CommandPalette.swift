@@ -49,6 +49,11 @@ public final class PaletteModel {
     public private(set) var inlineCompletion: String?
     public var selection = 0
     public var accentHue: Double = 0.48
+    /// Commands-only mode, shown as a chip; the data source still sees the ">" prefix.
+    public var commandsOnly = false {
+        didSet { if commandsOnly != oldValue { refresh(deletion: false) } }
+    }
+    private var effectiveQuery: String { commandsOnly ? ">" + query : query }
     public var placeholder = "Search tabs, history, or type a command"
     weak var dataSource: PaletteDataSource?
     var onDismiss: (() -> Void)?
@@ -58,7 +63,7 @@ public final class PaletteModel {
 
     func refresh(deletion: Bool) {
         guard let dataSource else { return }
-        let q = query
+        let q = effectiveQuery
         let quick = dataSource.quickResults(for: q, lastEditWasDeletion: deletion)
         items = quick.items
         inlineCompletion = quick.inline
@@ -67,7 +72,7 @@ public final class PaletteModel {
         task = Task { [weak self] in
             guard let self else { return }
             let full = await dataSource.fullResults(for: q, lastEditWasDeletion: deletion)
-            guard !Task.isCancelled, self.query == q else { return }
+            guard !Task.isCancelled, self.effectiveQuery == q else { return }
             let selectedID = self.items.indices.contains(self.selection) ? self.items[self.selection].id : nil
             self.items = full.items
             self.inlineCompletion = full.inline
@@ -83,7 +88,7 @@ public final class PaletteModel {
     func activate(modifiers: NSEvent.ModifierFlags) {
         if items.indices.contains(selection) {
             dataSource?.perform(items[selection], query: query, modifiers: modifiers)
-        } else {
+        } else if !commandsOnly {
             dataSource?.submit(query, modifiers: modifiers)
         }
         onDismiss?()
@@ -98,11 +103,21 @@ struct PaletteView: View {
     @Bindable var model: PaletteModel
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var appeared = false
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 15, weight: .medium))
+                if model.commandsOnly {
+                    Text("Actions")
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Color(nsColor: Tokens.selectionFill(hue: model.accentHue))))
+                        .accessibilityLabel("Actions only. Delete to search everything.")
+                }
                 ZStack(alignment: .leading) {
                     if let inline = model.inlineCompletion, inline.lowercased().hasPrefix(model.query.lowercased()), !model.query.isEmpty {
                         (Text(model.query).foregroundStyle(.clear) + Text(inline.dropFirst(model.query.count)).foregroundStyle(.tertiary))
@@ -115,11 +130,6 @@ struct PaletteView: View {
                         .focused($focused)
                         .onSubmit { model.activate(modifiers: NSEvent.modifierFlags) }
                 }
-                Text("All")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
             }
             .padding(.horizontal, 18)
             .frame(height: 56)
@@ -173,7 +183,9 @@ struct PaletteView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.palette, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Tokens.Radius.palette, style: .continuous).stroke(.separator.opacity(0.6), lineWidth: 0.5))
+        // A visible edge in dark mode, where the panel would otherwise match the page.
+        .overlay(RoundedRectangle(cornerRadius: Tokens.Radius.palette, style: .continuous)
+            .stroke(colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.10), lineWidth: colorScheme == .dark ? 1 : 0.5))
         .shadow(color: .black.opacity(0.22), radius: 28, y: 16)
         .shadow(color: .black.opacity(0.10), radius: 4, y: 2)
         .padding(48)
@@ -181,6 +193,11 @@ struct PaletteView: View {
         .onKeyPress(.upArrow) { model.move(-1); return .handled }
         .onKeyPress(.escape) { model.onDismiss?(); return .handled }
         .onKeyPress(.tab) { model.acceptInline(); return .handled }
+        .onKeyPress(.delete) {
+            // Backspace on an empty field leaves Actions mode.
+            if model.commandsOnly && model.query.isEmpty { model.commandsOnly = false; return .handled }
+            return .ignored
+        }
         .onKeyPress(keys: [.return], phases: .down) { press in
             if press.modifiers.contains(.command) || press.modifiers.contains(.shift) {
                 var flags: NSEvent.ModifierFlags = []
@@ -191,7 +208,12 @@ struct PaletteView: View {
             }
             return .ignored
         }
-        .onAppear { focused = true }
+        .scaleEffect(appeared || reduceMotion ? 1 : 0.97)
+        .opacity(appeared ? 1 : 0)
+        .onAppear {
+            focused = true
+            withAnimation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.3, dampingFraction: 0.82)) { appeared = true }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Command palette")
     }
@@ -204,10 +226,8 @@ struct PaletteRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: item.symbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
+            PaletteIcon(item: item)
+                .frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 1) {
                 highlighted.lineLimit(1)
                 if !item.subtitle.isEmpty {
@@ -271,8 +291,10 @@ public final class PaletteController {
         model.accentHue = hue
         model.onDismiss = { [weak self] in self?.dismiss() }
         model.query = ""
+        // ">" opens Actions mode as a chip rather than a visible character.
+        model.commandsOnly = initialText == ">"
         model.refresh(deletion: false)
-        model.query = initialText
+        model.query = initialText == ">" ? "" : initialText
 
         let scrim = PaletteScrim()
         scrim.onClick = { [weak self] in self?.dismiss() }
@@ -339,4 +361,29 @@ final class PaletteScrim: NSVisualEffectView {
 
 extension NSLayoutConstraint {
     func withPriority(_ p: NSLayoutConstraint.Priority) -> NSLayoutConstraint { priority = p; return self }
+}
+
+/// A row's icon: the site's own favicon for tabs, history and favorites;
+/// the SF Symbol for actions and search.
+struct PaletteIcon: View {
+    let item: PaletteItem
+    @State private var favicon: NSImage?
+
+    var body: some View {
+        Group {
+            if let favicon, item.section != .actions, item.section != .search {
+                Image(nsImage: favicon).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+            } else {
+                Image(systemName: item.symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task(id: item.url) {
+            guard item.section != .actions, item.section != .search, let url = item.url else { favicon = nil; return }
+            if let cached = Favicons.shared.cached(for: url) { favicon = cached; return }
+            Favicons.shared.load(for: url) { image in favicon = image }
+        }
+    }
 }

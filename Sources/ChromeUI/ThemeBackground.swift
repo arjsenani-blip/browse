@@ -125,11 +125,14 @@ public final class ThemeBackgroundView: NSView {
         let dark = isDark
         let backdrop = dark ? ThemeColor(r: 0.11, g: 0.11, b: 0.12) : ThemeColor(r: 0.95, g: 0.95, b: 0.96)
         var color = c
-        if dark, c.luminance > 0.35 {
-            // Keep the hue, drop the brightness: a light theme becomes a deep tint.
-            color = ThemeColor(r: c.r * 0.42, g: c.g * 0.42, b: c.b * 0.45)
+        if dark, c.brightness > 0.45 {
+            // A light theme becomes a deep, still-saturated version of itself:
+            // keep hue, keep (or lift) saturation, lower brightness. Scaling RGB
+            // instead drained the colour to grey-olive.
+            color = ThemeColor(hue: c.hue, saturation: min(1, max(0.45, c.saturation * 1.15)), brightness: 0.30 + c.brightness * 0.08)
         }
-        return backdrop.mixed(with: color, theme.intensity)
+        // In dark mode the backdrop pulls colour out, so lean further toward the theme.
+        return backdrop.mixed(with: color, dark ? min(1, theme.intensity + 0.2) : theme.intensity)
     }
 
     /// The colour text sits on (the gradient's middle), for choosing light or dark text.

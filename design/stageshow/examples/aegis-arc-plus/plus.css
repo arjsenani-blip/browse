@@ -1,0 +1,31 @@
+.ap-stage .ap-fav { display:grid; place-items:center; width:16px; height:16px; border-radius:4px; color:#fff; font:700 9px/1 -apple-system, system-ui; flex:none; }
+.ap-stage .ap-favs { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:10px 0 6px; }
+.ap-stage .ap-tile { position:relative; display:grid; place-items:center; height:44px; border-radius:10px; background:var(--ab-tile); box-shadow:inset 0 0 0 .5px var(--ab-tile-line); }
+.ap-stage .ap-tile .ap-fav { width:20px; height:20px; border-radius:5px; font-size:10px; }
+.ap-stage .ap-tile[data-live]::after { content:""; position:absolute; bottom:5px; width:4px; height:4px; border-radius:2px; background:#0b2b28; }
+.ap-stage .ap-clear { font-size:11px; color:var(--ab-side-faint); margin-left:6px; }
+.ap-stage .ap-np { position:relative; display:flex; align-items:center; gap:10px; margin-top:auto; padding:9px 12px 12px; border-radius:12px; background:rgba(255,255,255,.55); color:#0b2b28; box-shadow:0 1px 2px rgba(0,40,40,.12); }
+.ap-stage .ap-np__art { width:30px; height:30px; border-radius:7px; flex:none; background:linear-gradient(135deg,#f6a6b2,#7a6ad8 60%,#283a7a); }
+.ap-stage .ap-np__txt { display:flex; flex-direction:column; min-width:0; flex:1; font-size:12px; line-height:1.3; }
+.ap-stage .ap-np__txt span { font-size:11px; opacity:.6; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ap-stage .ap-np__bar { position:absolute; left:12px; right:12px; bottom:5px; height:2px; border-radius:1px; background:rgba(11,43,40,.14); }
+.ap-stage .ap-np__bar i { display:block; width:38%; height:100%; border-radius:1px; background:#0b2b28; }
+.ap-stage .ap-foot { display:flex; align-items:center; gap:10px; margin-top:10px; }
+.ap-stage .ap-spaces { display:flex; gap:6px; }
+.ap-stage .ap-space { display:grid; place-items:center; width:22px; height:22px; border-radius:7px; color:rgba(255,255,255,.95); opacity:.7; }
+.ap-stage .ap-space[data-on] { opacity:1; box-shadow:0 0 0 1.5px #fff, 0 0 0 3px rgba(11,43,40,.55); }
+.ap-stage .ap-foot__name { flex:1; font:600 12px/1 -apple-system, system-ui; color:#0b2b28; }
+.ap-stage .ap-scrim { background:rgba(10,40,40,.10); -webkit-backdrop-filter:blur(10px) saturate(1.2); backdrop-filter:blur(10px) saturate(1.2); }
+.ap-stage .ap-cmd { position:absolute; left:50%; top:96px; width:560px; transform:translateX(-50%) scale(.97); opacity:0; transition:transform .32s cubic-bezier(.2,.9,.3,1.15), opacity .16s; }
+.ap-stage .ap-cmd[data-show] { transform:translateX(-50%) scale(1); opacity:1; }
+.ap-stage .ap-ph { font-size:16px; color:var(--ss-ink-4,#8a9399); }
+.ap-stage .ap-arc { display:flex; align-items:center; gap:12px; margin:8px 10px 2px; padding:10px 12px; border-radius:12px; background:linear-gradient(90deg,rgba(14,138,126,.10),rgba(92,179,199,.12)); box-shadow:inset 0 0 0 .5px rgba(14,138,126,.25); }
+.ap-stage .ap-arc__mark { display:grid; place-items:center; width:28px; height:28px; border-radius:8px; background:#0e8a7e; color:#fff; flex:none; }
+.ap-stage .ap-arc__copy { display:flex; flex-direction:column; flex:1; font-size:13px; line-height:1.3; }
+.ap-stage .ap-arc__copy span { font-size:11.5px; opacity:.65; }
+.ap-stage .ap-arc__btn { padding:5px 12px; border-radius:7px; background:#0e8a7e; color:#fff; font:600 12px/1.3 -apple-system, system-ui; }
+.ap-stage .ap-cmd { left:calc(50% + 118px); top:110px; padding-bottom:2px; border-radius:18px; background:rgba(250,252,252,.86); -webkit-backdrop-filter:blur(24px) saturate(1.4); backdrop-filter:blur(24px) saturate(1.4); box-shadow:0 0 0 .5px rgba(0,40,40,.18), 0 24px 56px -16px rgba(0,40,50,.40), 0 2px 6px rgba(0,40,50,.10); overflow:hidden; color:#14211f; }
+.ap-stage .ap-cmd .ab-cmd__head { padding:14px 18px; }
+.ap-stage .ap-np { padding:10px 12px 14px; }
+.ap-stage .ap-np__bar { bottom:6px; }
+.ap-stage .ap-arc__mark svg { width:14px; height:14px; }

@@ -29,6 +29,12 @@ public struct ThemeColor: Codable, Sendable, Hashable {
         ThemeColor(r: r + (other.r - r) * t, g: g + (other.g - g) * t, b: b + (other.b - b) * t)
     }
 
+    public var saturation: Double {
+        let mx = max(r, g, b), mn = min(r, g, b)
+        return mx == 0 ? 0 : (mx - mn) / mx
+    }
+    public var brightness: Double { max(r, g, b) }
+
     public var hue: Double {
         let mx = max(r, g, b), mn = min(r, g, b), d = mx - mn
         guard d > 0 else { return 0 }

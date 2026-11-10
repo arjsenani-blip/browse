@@ -11,7 +11,7 @@ public final class TopTabBar: NSView {
     private let reload = SidebarViewController.iconButton("arrow.clockwise", "Reload")
     private let pill = URLPill()
     private let strip = NSStackView()
-    private let scroll = NSScrollView()
+    private let scroll = NSView()
     private let newTab = SidebarViewController.iconButton("plus", "New Tab (⌘T)")
     private var state = SidebarState()
 
@@ -22,18 +22,15 @@ public final class TopTabBar: NSView {
         reload.target = self; reload.action = #selector(doReload)
         newTab.target = self; newTab.action = #selector(addTab)
         pill.onClick = { [weak self] in self?.delegate?.sidebarOpenPalette() }
+        // A clipped row (no scroll view): chips shrink to fit, like Safari's tab bar.
         strip.orientation = .horizontal
         strip.spacing = 4
         strip.alignment = .centerY
-        let doc = FlippedView()
-        doc.translatesAutoresizingMaskIntoConstraints = false
+        strip.distribution = .fill
         strip.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(strip)
-        scroll.documentView = doc
-        scroll.drawsBackground = false
-        scroll.hasHorizontalScroller = false
-        scroll.horizontalScrollElasticity = .allowed
-        scroll.verticalScrollElasticity = .none
+        scroll.wantsLayer = true
+        scroll.layer?.masksToBounds = true
+        scroll.addSubview(strip)
         let nav = NSStackView(views: [back, forward, reload])
         nav.spacing = 4
         for v in [nav, pill, scroll, newTab] as [NSView] {
@@ -54,12 +51,9 @@ public final class TopTabBar: NSView {
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
             newTab.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             newTab.centerYAnchor.constraint(equalTo: centerYAnchor),
-            strip.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            strip.topAnchor.constraint(equalTo: doc.topAnchor),
-            strip.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
-            doc.trailingAnchor.constraint(equalTo: strip.trailingAnchor),
-            doc.heightAnchor.constraint(equalTo: scroll.contentView.heightAnchor),
-            doc.widthAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.widthAnchor),
+            strip.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            strip.trailingAnchor.constraint(lessThanOrEqualTo: scroll.trailingAnchor),
+            strip.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
         ])
         setAccessibilityRole(.toolbar)
     }
@@ -83,9 +77,7 @@ public final class TopTabBar: NSView {
         for row in new.today.reversed() {
             strip.addArrangedSubview(chip(row, compact: false))
         }
-        if let selected = new.selected, let view = strip.arrangedSubviews.first(where: { ($0 as? TabChip)?.id == selected }) {
-            DispatchQueue.main.async { view.scrollToVisible(view.bounds) }
-        }
+
     }
 
     private func chip(_ row: SidebarState.Row, compact: Bool) -> TabChip {
@@ -102,9 +94,6 @@ public final class TopTabBar: NSView {
     @objc private func addTab() { delegate?.sidebarNewTab() }
 }
 
-private final class FlippedView: NSView {
-    override var isFlipped: Bool { true }
-}
 
 final class TabChip: NSView {
     let id: TabID
@@ -159,7 +148,7 @@ final class TabChip: NSView {
             widthAnchor.constraint(equalToConstant: 32).isActive = true
             close.isHidden = true
         } else {
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 110).isActive = true
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
             widthAnchor.constraint(lessThanOrEqualToConstant: 220).isActive = true
             let preferred = widthAnchor.constraint(equalToConstant: 200)
             preferred.priority = .defaultLow
