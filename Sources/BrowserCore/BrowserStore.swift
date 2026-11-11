@@ -149,6 +149,27 @@ public final class BrowserStore {
         return removed
     }
 
+    public func setIcon(_ icon: String?, for id: UUID) {
+        mutateSpace(id) { $0.icon = icon }
+    }
+
+    /// Archives every today tab in a space (the sidebar's "Clear"), keeping the selected one.
+    @discardableResult
+    public func clearToday(in spaceID: UUID, keepSelected: Bool = true) -> [TabID] {
+        guard let space = spaces.first(where: { $0.id == spaceID }) else { return [] }
+        let victims = space.today.filter { !(keepSelected && $0 == space.selected) }
+        let now = Date()
+        for id in victims {
+            guard let tab = tabs[id] else { continue }
+            if !ephemeralSpaces.contains(spaceID) {
+                archive.append(ArchivedTab(id: id, url: tab.url, title: tab.displayTitle, spaceID: spaceID, archived: now))
+            }
+            mutateSpace(spaceID) { $0.remove(id) }
+            tabs[id] = nil
+        }
+        return victims
+    }
+
     public func setTheme(_ theme: SpaceTheme, for id: UUID) {
         mutateSpace(id) { space in
             space.theme = theme

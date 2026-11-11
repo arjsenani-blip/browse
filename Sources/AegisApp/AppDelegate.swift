@@ -96,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             do { plan = plan.merged(with: try source.load(arcOptions: .init())) } catch { errors.append("\(source.displayName): \(error)") }
         }
         let summary = services.store.apply(plan, newProfilesPerSpace: separate.state == .on)
+        UserDefaults.standard.set(true, forKey: "importBannerDone")
         let done = NSAlert()
         done.messageText = "Imported \(summary.tabsAdded) tabs into \(summary.touchedSpaceIDs.count) spaces"
         done.informativeText = (errors + summary.warnings.prefix(5)).joined(separator: "\n")

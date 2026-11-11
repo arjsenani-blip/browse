@@ -64,9 +64,11 @@ public struct SessionStore: Sendable {
 }
 
 public enum AppPaths {
-    /// ~/Library/Application Support/Aegis
+    /// ~/Library/Application Support/Aegis, or "Aegis Dev" for development
+    /// bundles (bundle ID ending in .dev), so test runs never touch real data.
     public static var support: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appending(path: "Aegis", directoryHint: .isDirectory)
+        let dev = Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true
+        return base.appending(path: dev ? "Aegis Dev" : "Aegis", directoryHint: .isDirectory)
     }
 }

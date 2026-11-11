@@ -25,8 +25,22 @@ public struct PaletteItem: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A one-off card above the results when the field is empty (e.g. "Coming from Arc?").
+public struct PaletteBanner {
+    public var symbol: String
+    public var title: String
+    public var subtitle: String
+    public var actionTitle: String
+    public var action: @MainActor () -> Void
+    public init(symbol: String, title: String, subtitle: String, actionTitle: String, action: @escaping @MainActor () -> Void) {
+        self.symbol = symbol; self.title = title; self.subtitle = subtitle; self.actionTitle = actionTitle; self.action = action
+    }
+}
+
 @MainActor
 public protocol PaletteDataSource: AnyObject {
+    /// Shown above results while the field is empty.
+    func banner() -> PaletteBanner?
     /// Synchronous in-memory pass; must be fast (< 4 ms).
     func quickResults(for query: String, lastEditWasDeletion: Bool) -> (items: [PaletteItem], inline: String?)
     /// Full pass including history FTS; may be cancelled by the next keystroke.
@@ -34,6 +48,10 @@ public protocol PaletteDataSource: AnyObject {
     func perform(_ item: PaletteItem, query: String, modifiers: NSEvent.ModifierFlags)
     /// Enter with no selection: navigate to/search the raw text.
     func submit(_ text: String, modifiers: NSEvent.ModifierFlags)
+}
+
+public extension PaletteDataSource {
+    func banner() -> PaletteBanner? { nil }
 }
 
 @MainActor
@@ -57,6 +75,7 @@ public final class PaletteModel {
     public var placeholder = "Search tabs, history, or type a command"
     weak var dataSource: PaletteDataSource?
     var onDismiss: (() -> Void)?
+    var banner: PaletteBanner?
     private var task: Task<Void, Never>?
 
     public init() {}
@@ -133,6 +152,30 @@ struct PaletteView: View {
             }
             .padding(.horizontal, 18)
             .frame(height: 56)
+
+            if let banner = model.banner, model.query.isEmpty, !model.commandsOnly {
+                Divider()
+                HStack(spacing: 12) {
+                    Image(systemName: banner.symbol)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color(nsColor: Tokens.accent(hue: model.accentHue))))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(banner.title).font(.system(size: 13.5, weight: .semibold))
+                        Text(banner.subtitle).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    Spacer(minLength: 8)
+                    Button(banner.actionTitle) { model.onDismiss?(); banner.action() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color(nsColor: Tokens.accent(hue: model.accentHue)))
+                        .controlSize(.regular)
+                }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: Tokens.selectionFill(hue: model.accentHue))))
+                .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, model.items.isEmpty ? 10 : 2)
+                .accessibilityElement(children: .combine)
+            }
 
             if !model.items.isEmpty {
                 Divider()
@@ -279,6 +322,8 @@ public final class PaletteController {
     private var paletteView: NSView?
 
     public init() {}
+    /// Called when the palette closes (the window restores what it hid).
+    public var onClose: (() -> Void)?
 
     public var isOpen: Bool { host != nil }
 
@@ -291,6 +336,7 @@ public final class PaletteController {
         model.accentHue = hue
         model.onDismiss = { [weak self] in self?.dismiss() }
         model.query = ""
+        model.banner = dataSource.banner()
         // ">" opens Actions mode as a chip rather than a visible character.
         model.commandsOnly = initialText == ">"
         model.refresh(deletion: false)
@@ -325,6 +371,7 @@ public final class PaletteController {
     public func dismiss() {
         guard let host else { return }
         self.host = nil
+        onClose?()
         let palette = paletteView
         paletteView = nil
         model.dataSource = nil

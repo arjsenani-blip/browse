@@ -17,6 +17,13 @@ for b in "$BIN_DIR"/*.bundle; do
   [ -e "$b" ] && cp -R "$b" "$APP/Contents/Resources/"
 done
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+# Development builds get their own identity (bundle ID, data folder, WebKit
+# stores, Keychain items) so they can run beside the installed app safely.
+# scripts/install.sh builds with AEGIS_RELEASE=1 for the real identity.
+if [ "${AEGIS_RELEASE:-0}" != "1" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier app.aegis.browser.dev" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleName Aegis Dev" "$APP/Contents/Info.plist"
+fi
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 codesign --force --sign - --entitlements Resources/Aegis.entitlements --options runtime "$APP"

@@ -60,6 +60,33 @@ final class PaletteSource: PaletteDataSource {
                             commands: Self.commands, lastEditWasDeletion: deletion)
     }
 
+    /// "Coming from Arc?" (or Chrome/Safari on a brand-new install) until the user imports or dismisses it.
+    /// Import sources found on this Mac, looked up once per launch.
+    private static var detectedSources: [ImportSource]?
+
+    func banner() -> PaletteBanner? {
+        guard !UserDefaults.standard.bool(forKey: "importBannerDone") else { return nil }
+        if Self.detectedSources == nil { Self.detectedSources = ImportSources.detect().filter { $0.status == .readable } }
+        let sources = Self.detectedSources ?? []
+        let action: @MainActor () -> Void = {
+            (NSApp.delegate as? AppDelegate)?.importBrowserData()
+        }
+        if let arc = sources.first(where: { if case .arcSidebar = $0.kind { return true }; return false }),
+           let plan = try? arc.load(arcOptions: .init()) {
+            let favs = Set(plan.spaces.flatMap(\.favorites).map(\.url)).count
+            let pinned = plan.spaces.reduce(0) { $0 + $1.pinned.count }
+            return PaletteBanner(symbol: "arrow.down.to.line", title: "Coming from Arc?",
+                                 subtitle: "Bring \(plan.spaces.count) space\(plan.spaces.count == 1 ? "" : "s"), \(favs) favorites and \(pinned) pinned tabs. Nothing loads until you open it.",
+                                 actionTitle: "Import", action: action)
+        }
+        let isFresh = services.store.tabs.isEmpty
+        if isFresh, let other = sources.first {
+            return PaletteBanner(symbol: "arrow.down.to.line", title: "Bring your bookmarks",
+                                 subtitle: "Import from \(other.displayName) into a space of its own.", actionTitle: "Import", action: action)
+        }
+        return nil
+    }
+
     func quickResults(for query: String, lastEditWasDeletion: Bool) -> (items: [ChromeUI.PaletteItem], inline: String?) {
         convert(services.engine.quickResults(self.query(query, deletion: lastEditWasDeletion)))
     }

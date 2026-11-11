@@ -68,6 +68,23 @@ enum DebugSnapshot {
                     services.frontController?.debugSetPaletteQuery(q)
                 }
             }
+            if args.contains("--demo-spaces"), let c = services.frontController {
+                // Three themed spaces, favorites and pinned tabs, for design review.
+                let names = ["Work", "Study"]
+                for (i, n) in names.enumerated() where services.store.spaces.count < 3 {
+                    let sp = services.store.addSpace(name: n, accentHue: 0.6, newProfile: false)
+                    services.store.setTheme(SpaceTheme.presets[[2, 4][i]].theme, for: sp.id)
+                    services.store.openTab(URL(string: "https://example.com"), select: true, in: sp.id)
+                }
+                let space = c.windowSpace
+                for u in ["https://github.com", "https://www.youtube.com", "https://news.ycombinator.com", "https://en.wikipedia.org", "https://www.apple.com"] {
+                    let id = services.store.openTab(URL(string: u), select: false, in: space.id)
+                    services.store.move(id, to: .favorite)
+                }
+                let p = services.store.openTab(URL(string: "https://developer.apple.com"), select: false, in: space.id)
+                services.store.move(p, to: .pinned)
+                c.refresh()
+            }
             if args.contains("--organize"), let c = services.frontController {
                 let all = services.store.currentSpace.today
                 if all.count >= 4 {
@@ -98,6 +115,7 @@ enum DebugSnapshot {
                 }
                 services.store.currentSpaceID = services.store.spaces[0].id
                 c.refresh()
+                print("SWIPEBENCH setup: spaces \(services.store.spaces.count), visible \(c.visibleSpaces.count)"); fflush(stdout)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                     let bench = SwipeBenchmark(controller: c) { }
                     objc_setAssociatedObject(c, "bench", bench, .OBJC_ASSOCIATION_RETAIN)

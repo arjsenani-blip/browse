@@ -249,6 +249,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
         s.pages = visible.map { sp in
             var page = SidebarState.Page(id: sp.id, name: sp.name, theme: sp.resolvedTheme)
+            page.icon = sp.icon ?? (isPrivateWindow ? "eye.slash" : Space.icons[(visible.firstIndex { $0.id == sp.id } ?? 0) % Space.icons.count])
             page.favorites = sp.favorites.compactMap(row)
             page.pinned = sp.pinned.compactMap(row)
             page.today = sp.today.compactMap(row)
@@ -327,9 +328,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             if best?.1.mediaState == .playing { break }
         }
         guard let (id, t) = best else { return nil }
-        var title = t.title.isEmpty ? (store.tabs[id]?.displayTitle ?? "") : t.title
+        var title = t.mediaTitle ?? (t.title.isEmpty ? (store.tabs[id]?.displayTitle ?? "") : t.title)
         if title == t.url?.host(), let file = t.url?.lastPathComponent, !file.isEmpty, file != "/" { title = file.removingPercentEncoding ?? file }
-        return NowPlaying(tab: id, title: title, url: t.url, playing: t.mediaState == .playing, hasVideo: t.hasVideo)
+        return NowPlaying(tab: id, title: title, url: t.url, playing: t.mediaState == .playing, hasVideo: t.hasVideo,
+                          artist: t.mediaArtist ?? "", artwork: t.mediaArtwork)
     }
 
     private func showSelected() {
@@ -361,7 +363,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         if mode == .navigate { initial = store.selectedTab.flatMap { runtime.tab($0.id)?.url?.absoluteString } ?? "" }
         if mode == .command { initial = ">" }
         palette.model.placeholder = mode == .newTab ? "Search or enter address" : "Search tabs, history, or type a command"
-        palette.show(in: window, over: card, dataSource: source, initialText: initial, hue: store.currentSpace.accentHue)
+        card.setEmptyStateHidden(true)
+        palette.onClose = { [weak self] in self?.card.setEmptyStateHidden(false) }
+        palette.show(in: window, over: card, dataSource: source, initialText: initial, hue: windowSpace.accentHue)
     }
 
     func debugSetPaletteQuery(_ q: String) { palette.model.query = q }
@@ -574,21 +578,40 @@ extension BrowserWindowController: SidebarDelegate {
     func sidebarSpaceMenu() -> NSMenu? {
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem(title: "Rename Space…") { [weak self] in self?.renameSpace() })
-        let colors = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
+        let colors = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
         let sub = NSMenu()
-        for (name, hue) in BrowserWindowController.spaceColors {
-            let item = ClosureMenuItem(title: name) { [weak self] in
+        for preset in SpaceTheme.presets {
+            let item = ClosureMenuItem(title: preset.name) { [weak self] in
                 guard let self else { return }
-                self.store.renameSpace(self.store.currentSpaceID, name: self.store.currentSpace.name, accentHue: hue)
+                self.store.setTheme(preset.theme, for: self.windowSpace.id)
             }
-            item.image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { r in
-                Tokens.accent(hue: hue).setFill(); NSBezierPath(ovalIn: r).fill(); return true
+            let t = preset.theme
+            item.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { r in
+                let g = NSGradient(starting: NSColor(srgbRed: t.top.r, green: t.top.g, blue: t.top.b, alpha: 1),
+                                   ending: NSColor(srgbRed: t.bottom.r, green: t.bottom.g, blue: t.bottom.b, alpha: 1))
+                g?.draw(in: NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 1), xRadius: 4, yRadius: 4), angle: -90)
+                return true
             }
-            item.state = abs(store.currentSpace.accentHue - hue) < 0.01 ? .on : .off
+            item.state = windowSpace.theme == t ? .on : .off
             sub.addItem(item)
         }
+        sub.addItem(.separator())
+        sub.addItem(ClosureMenuItem(title: "Customize in Settings…") { SettingsWindow.shared.show(services: (NSApp.delegate as! AppDelegate).services) })
         colors.submenu = sub
         menu.addItem(colors)
+        let iconItem = NSMenuItem(title: "Icon", action: nil, keyEquivalent: "")
+        let iconMenu = NSMenu()
+        for symbol in Space.icons {
+            let item = ClosureMenuItem(title: symbol.replacingOccurrences(of: ".", with: " ").capitalized) { [weak self] in
+                guard let self else { return }
+                self.store.setIcon(symbol, for: self.windowSpace.id)
+            }
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            item.state = windowSpace.icon == symbol ? .on : .off
+            iconMenu.addItem(item)
+        }
+        iconItem.submenu = iconMenu
+        menu.addItem(iconItem)
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(title: "New Space") { [weak self] in self?.newSpace() })
         if store.spaces.count > 1 {
@@ -632,6 +655,13 @@ extension BrowserWindowController: SidebarDelegate {
             let runtime = runtime
             Task { await runtime.removeProfile(profile.id) }
         }
+    }
+
+    func sidebarClearToday() {
+        let space = windowSpace
+        let removed = store.clearToday(in: space.id)
+        for id in removed { runtime.discard(id) }
+        if !removed.isEmpty { Toast.show("Cleared \(removed.count) tab\(removed.count == 1 ? "" : "s") · find them in ⌘K", in: window) }
     }
 
     func sidebarToggleMedia(_ id: TabID) { runtime.tab(id)?.togglePlayback() }

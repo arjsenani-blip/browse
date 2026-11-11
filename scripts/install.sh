@@ -1,9 +1,15 @@
 #!/bin/zsh
-# Rebuilds Aegis and installs it to /Applications (quits a running copy first).
+# Rebuilds Aegis (real identity) and installs it to /Applications.
+# Never quits a running copy: the new version takes effect on next launch.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-scripts/bundle.sh release
-pkill -x Aegis 2>/dev/null || true
+AEGIS_RELEASE=1 scripts/bundle.sh release
 ditto build/Aegis.app /Applications/Aegis.app
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Aegis.app
-echo "Installed /Applications/Aegis.app"
+if pgrep -f "/Applications/Aegis.app/Contents/MacOS/Aegis" >/dev/null; then
+  echo "Installed /Applications/Aegis.app — quit and reopen Aegis to use the new version"
+else
+  echo "Installed /Applications/Aegis.app"
+fi
+# Leave a dev build in build/ for test runs (its own bundle ID and data folder).
+scripts/bundle.sh release >/dev/null

@@ -92,6 +92,11 @@ public final class ContentCard: NSView {
         })
     }
 
+    /// Hidden while the palette is open, so the two never stack.
+    public func setEmptyStateHidden(_ hidden: Bool) {
+        emptyView.alphaValue = hidden ? 0 : 1
+    }
+
     public func setCornerRadius(_ r: CGFloat) {
         layer?.cornerRadius = r
         clip.layer?.cornerRadius = r

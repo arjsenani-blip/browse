@@ -1,4 +1,5 @@
 import Foundation
+import BrowserCore
 
 public enum ExtensionInstallError: Error, Equatable, Sendable {
     case unsafeArchive(String)
@@ -80,9 +81,7 @@ public struct ExtensionInstaller: Sendable {
     public let root: URL
 
     public static var defaultRoot: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "Aegis", directoryHint: .isDirectory)
-            .appending(path: "Extensions", directoryHint: .isDirectory)
+        AppPaths.support.appending(path: "Extensions", directoryHint: .isDirectory)
     }
 
     public init(root: URL = ExtensionInstaller.defaultRoot) { self.root = root }

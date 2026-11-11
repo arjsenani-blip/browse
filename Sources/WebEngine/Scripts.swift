@@ -137,10 +137,15 @@ enum MediaScript {
           const playing = els.find(m => !m.paused && !m.ended && m.readyState > 2 && !m.muted && m.volume > 0);
           const state = playing ? 'playing' : (els.some(m => !m.ended && m.currentTime > 0) ? 'paused' : 'none');
           const kind = playing ? (playing.videoWidth > 0 ? 'video' : 'audio') : '';
-          const key = state + kind;
+          const md = navigator.mediaSession && navigator.mediaSession.metadata;
+          const og = document.querySelector('meta[property="og:image"]');
+          const art = (md && md.artwork && md.artwork.length ? md.artwork[md.artwork.length - 1].src : '') || (og ? og.content : '');
+          const title = (md && md.title) || '';
+          const artist = (md && (md.artist || md.album)) || '';
+          const key = state + kind + title + art;
           if (key === last) return;
           last = key;
-          try { h.postMessage({ type: 'media', state, kind, top: window === window.top }); } catch (_) {}
+          try { h.postMessage({ type: 'media', state, kind, title, artist, art, top: window === window.top }); } catch (_) {}
         }, 150);
       };
       for (const e of ['play', 'playing', 'pause', 'ended', 'emptied', 'volumechange'])

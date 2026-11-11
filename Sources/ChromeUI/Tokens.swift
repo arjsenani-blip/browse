@@ -21,7 +21,7 @@ public enum Tokens {
     public enum Size {
         public static let tabRow: CGFloat = 30
         public static let favicon: CGFloat = 16
-        public static let favoriteTile: CGFloat = 40
+        public static let favoriteTile: CGFloat = 44
         public static let urlPill: CGFloat = 32
         public static let sidebarDefault: CGFloat = 248
         public static let sidebarMin: CGFloat = 200

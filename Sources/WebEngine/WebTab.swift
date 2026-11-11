@@ -38,6 +38,10 @@ public final class WebTab: NSObject {
     public enum MediaState: Sendable { case none, playing, paused }
     public private(set) var mediaState: MediaState = .none
     public private(set) var hasVideo = false
+    /// From the page's Media Session metadata, when it sets any.
+    public private(set) var mediaTitle: String?
+    public private(set) var mediaArtist: String?
+    public private(set) var mediaArtwork: URL?
 
     public func togglePlayback() {
         webView?.evaluateJavaScript(MediaScript.togglePlayback, in: nil, in: Worlds.media)
@@ -322,6 +326,9 @@ extension WebTab {
             if state == "playing" { activity.insert(.playingMedia) } else { activity.remove(.playingMedia) }
             mediaState = state == "playing" ? .playing : state == "paused" ? .paused : .none
             hasVideo = (body["kind"] as? String) == "video"
+            if let t = body["title"] as? String, !t.isEmpty { mediaTitle = t }
+            if let a = body["artist"] as? String { mediaArtist = a }
+            if let art = body["art"] as? String, let u = URL(string: art), u.scheme == "https" { mediaArtwork = u }
             delegate?.webTabDidChange(self)
             return
         }

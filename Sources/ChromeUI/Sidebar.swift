@@ -20,6 +20,7 @@ public struct SidebarState: Equatable {
         public var id: UUID
         public var name: String
         public var theme: SpaceTheme
+        public var icon: String = "house"
         public var favorites: [Row] = []
         public var pinned: [Row] = []
         public var today: [Row] = []
@@ -82,8 +83,11 @@ public struct NowPlaying: Equatable {
     public var url: URL?
     public var playing: Bool
     public var hasVideo: Bool
-    public init(tab: TabID, title: String, url: URL?, playing: Bool, hasVideo: Bool) {
+    public var artist: String = ""
+    public var artwork: URL?
+    public init(tab: TabID, title: String, url: URL?, playing: Bool, hasVideo: Bool, artist: String = "", artwork: URL? = nil) {
         self.tab = tab; self.title = title; self.url = url; self.playing = playing; self.hasVideo = hasVideo
+        self.artist = artist; self.artwork = artwork
     }
 }
 
@@ -105,6 +109,7 @@ public protocol SidebarDelegate: AnyObject {
     /// The swipe is about to show this space; warm its content.
     func sidebarWillSwipe(toSpace index: Int)
     func sidebarSpaceMenu() -> NSMenu?
+    func sidebarClearToday()
     /// Live position between two spaces (0 = `from`, 1 = `to`) for the background cross-fade;
     /// a negative fraction means "animate from `from` to `to`" (keyboard or dot switch).
     func sidebarSwipeProgress(from: Int, to: Int, fraction: Double)
@@ -158,7 +163,7 @@ public final class SidebarViewController: NSViewController {
         spaceMenuHost.menuProvider = { [weak self] in self?.delegate?.sidebarSpaceMenu() }
         spaceLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         spaceLabel.textColor = Tokens.secondaryInk
-        spaceDots.spacing = 7
+        spaceDots.spacing = 5
         let spaceGroup = NSStackView(views: [spaceDots, spaceLabel])
         spaceGroup.spacing = 8
         spaceGroup.translatesAutoresizingMaskIntoConstraints = false
@@ -294,15 +299,16 @@ public final class SidebarViewController: NSViewController {
         if spaceDots.arrangedSubviews.count != count {
             spaceDots.arrangedSubviews.forEach { $0.removeFromSuperview() }
             for i in 0..<count {
-                let dot = SpaceDot()
-                dot.onClick = { [weak self] in self?.delegate?.sidebarSwitchSpace(i) }
-                spaceDots.addArrangedSubview(dot)
+                let chip = SpaceChip()
+                chip.onClick = { [weak self] in self?.delegate?.sidebarSwitchSpace(i) }
+                spaceDots.addArrangedSubview(chip)
             }
         }
-        for (i, v) in spaceDots.arrangedSubviews.enumerated() {
-            (v as? SpaceDot)?.set(on: i == state.currentIndex, style: state.style)
+        for (i, v) in spaceDots.arrangedSubviews.enumerated() where state.pages.indices.contains(i) {
+            (v as? SpaceChip)?.set(page: state.pages[i], on: i == state.currentIndex, style: state.style)
         }
         spaceLabel.stringValue = state.spaceName
+        // One chip is just noise; show the name alone until there's a second space.
         spaceDots.isHidden = count < 2
     }
 
@@ -584,7 +590,7 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         didSet { scroll.onSwipeBegan = onSwipeBegan }
     }
     private var delegate: SidebarDelegate? { owner?.delegate }
-    private let favoritesGrid = NSStackView()
+    private let favoritesGrid = NSStackView()   // vertical stack of rows of 4
     private let table = SidebarTableView()
     private let scroll = SwipeAwareScrollView()
     private var page = SidebarState.Page(id: UUID(), name: "", theme: .from(hue: 0.48))
@@ -600,10 +606,9 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     init() {
         super.init(frame: .zero)
-        favoritesGrid.orientation = .horizontal
-        favoritesGrid.distribution = .fillEqually
+        favoritesGrid.orientation = .vertical
         favoritesGrid.spacing = 8
-        favoritesGrid.alignment = .top
+        favoritesGrid.alignment = .leading
         table.headerView = nil
         table.backgroundColor = .clear
         table.intercellSpacing = NSSize(width: 0, height: Tokens.Space.tabGap)
@@ -651,15 +656,28 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let old = page, oldStyle = style
         page = new
         style = newStyle
-        if old.favorites != new.favorites || old.selected != new.selected || oldStyle != newStyle || favoritesGrid.arrangedSubviews.count != min(8, new.favorites.count) {
+        if old.favorites != new.favorites || old.selected != new.selected || oldStyle != newStyle || favoritesGrid.arrangedSubviews.isEmpty != new.favorites.isEmpty {
             favoritesGrid.arrangedSubviews.forEach { $0.removeFromSuperview() }
-            for fav in new.favorites.prefix(8) {
-                let tile = FavoriteTile(row: fav, selected: fav.id == new.selected, style: newStyle)
-                tile.onClick = { [weak self] in self?.delegate?.sidebarSelect(fav.id) }
-                tile.menuProvider = { [weak self] in self?.delegate?.sidebarContextMenu(for: fav.id) }
-                favoritesGrid.addArrangedSubview(tile)
+            let favs = Array(new.favorites.prefix(12))
+            // Four to a row, like Arc; a short last row keeps tile size (spacers fill).
+            for start in stride(from: 0, to: favs.count, by: 4) {
+                let row = NSStackView()
+                row.orientation = .horizontal
+                row.distribution = .fillEqually
+                row.spacing = 8
+                for fav in favs[start..<min(start + 4, favs.count)] {
+                    let tile = FavoriteTile(row: fav, selected: fav.id == new.selected, style: newStyle)
+                    tile.onClick = { [weak self] in self?.delegate?.sidebarSelect(fav.id) }
+                    tile.menuProvider = { [weak self] in self?.delegate?.sidebarContextMenu(for: fav.id) }
+                    row.addArrangedSubview(tile)
+                }
+                while row.arrangedSubviews.count < 4 { row.addArrangedSubview(NSView()) }
+                row.translatesAutoresizingMaskIntoConstraints = false
+                favoritesGrid.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: favoritesGrid.widthAnchor).isActive = true
             }
-            gridHeight.constant = new.favorites.isEmpty ? 0 : Tokens.Size.favoriteTile + Tokens.Space.sectionGap
+            let rows = CGFloat((favs.count + 3) / 4)
+            gridHeight.constant = favs.isEmpty ? 0 : rows * Tokens.Size.favoriteTile + (rows - 1) * 8 + Tokens.Space.sectionGap
         }
         var items: [Item] = new.pinned.map { .tab($0, .pinned) }
         items.append(.divider)
@@ -698,14 +716,18 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        if case .divider = rows[row] { return 26 }
+        if case .divider = rows[row] { return rows.first == .divider ? 26 : 36 }
         return style.rowHeight
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         switch rows[row] {
         case .divider:
-            return tableView.makeView(withIdentifier: DividerCell.id, owner: nil) as? DividerCell ?? DividerCell()
+            let v = tableView.makeView(withIdentifier: DividerCell.id, owner: nil) as? DividerCell ?? DividerCell()
+            let selectedIsToday = page.today.contains { $0.id == page.selected }
+            v.onClear = page.today.count > (selectedIsToday ? 1 : 0)
+                ? { [weak self] in self?.delegate?.sidebarClearToday() } : nil
+            return v
         case .newTab:
             let v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
             v.configureNewTab(style: style)
@@ -826,7 +848,7 @@ final class TabCell: NSTableCellView {
         self.style = style
         label.stringValue = row.title
         label.textColor = .labelColor
-        label.font = .systemFont(ofSize: style.fontSize, weight: selected ? .semibold : .regular)
+        label.font = .systemFont(ofSize: style.fontSize, weight: selected ? .medium : .regular)
         background.layer?.backgroundColor = selected ? style.selectionFill.cgColor : NSColor.clear.cgColor
         background.layer?.shadowOpacity = selected && style.tinted && !style.onDark ? 0.08 : 0
         background.layer?.shadowRadius = 2
@@ -836,16 +858,25 @@ final class TabCell: NSTableCellView {
         toolTip = row.sleeping ? "\(row.title) — sleeping" : row.title
         setAccessibilityLabel(row.title)
         currentURL = row.url
-        icon.image = Favicons.shared.cached(for: row.url) ?? Favicons.placeholder()
-        icon.contentTintColor = nil
+        setIcon(Favicons.shared.cached(for: row.url) ?? Favicons.placeholder())
         if Favicons.shared.cached(for: row.url) == nil {
             let url = row.url
             Favicons.shared.load(for: url) { [weak self] image in
                 guard let self, self.currentURL == url, let image else { return }
-                self.icon.image = image
+                self.setIcon(image)
             }
         }
         closeButton.isHidden = true
+    }
+
+    /// Dark favicons (GitHub, X…) vanish on dark themes: give them a light plate.
+    private func setIcon(_ image: NSImage) {
+        icon.image = image
+        icon.contentTintColor = nil
+        icon.wantsLayer = true
+        let plate = style.onDark && Favicons.isDark(image)
+        icon.layer?.backgroundColor = plate ? NSColor.white.withAlphaComponent(0.88).cgColor : nil
+        icon.layer?.cornerRadius = 3.5
     }
 
     func configureNewTab(style: SidebarStyle) {
@@ -858,6 +889,7 @@ final class TabCell: NSTableCellView {
         background.layer?.shadowOpacity = 0
         icon.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
         icon.contentTintColor = Tokens.secondaryInk
+        icon.layer?.backgroundColor = nil
         audio.isHidden = true
         alphaValue = 1
         currentURL = nil
@@ -887,6 +919,8 @@ final class TabCell: NSTableCellView {
 
 final class DividerCell: NSTableCellView {
     static let id = NSUserInterfaceItemIdentifier("DividerCell")
+    private let clear = NSButton(title: "Clear", target: nil, action: nil)
+    var onClear: (() -> Void)? { didSet { clear.isHidden = onClear == nil } }
     init() {
         super.init(frame: .zero)
         identifier = DividerCell.id
@@ -895,16 +929,27 @@ final class DividerCell: NSTableCellView {
         label.textColor = Tokens.secondaryInk
         let line = NSBox()
         line.boxType = .separator
-        for v in [label, line] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        clear.isBordered = false
+        clear.font = .systemFont(ofSize: 11)
+        clear.contentTintColor = Tokens.secondaryInk
+        clear.target = self
+        clear.action = #selector(clearTapped)
+        clear.toolTip = "Archive today's tabs (they stay searchable in ⌘K)"
+        clear.isHidden = true
+        for v in [label, line, clear] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
             line.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
-            line.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            line.centerYAnchor.constraint(equalTo: centerYAnchor),
+            line.centerYAnchor.constraint(equalTo: label.centerYAnchor),
+            clear.leadingAnchor.constraint(equalTo: line.trailingAnchor, constant: 6),
+            clear.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            clear.centerYAnchor.constraint(equalTo: label.centerYAnchor),
         ])
+        line.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8).withPriority(.defaultLow).isActive = true
     }
     required init?(coder: NSCoder) { fatalError() }
+    @objc private func clearTapped() { onClear?() }
 }
 
 /// The compact address: shield, host, then pinned extension buttons at the
@@ -994,16 +1039,34 @@ final class FavoriteTile: NSView {
         layer?.cornerRadius = Tokens.Radius.tile
         layer?.cornerCurve = .continuous
         let icon = NSImageView()
-        icon.image = Favicons.shared.cached(for: row.url) ?? Favicons.placeholder()
-        Favicons.shared.load(for: row.url) { image in if let image { icon.image = image } }
+        icon.wantsLayer = true
+        icon.layer?.cornerRadius = 4
+        let setIcon: (NSImage) -> Void = { image in
+            icon.image = image
+            icon.layer?.backgroundColor = style.onDark && Favicons.isDark(image) ? NSColor.white.withAlphaComponent(0.88).cgColor : nil
+        }
+        setIcon(Favicons.shared.cached(for: row.url) ?? Favicons.placeholder())
+        Favicons.shared.load(for: row.url) { image in if let image { setIcon(image) } }
         icon.translatesAutoresizingMaskIntoConstraints = false
         addSubview(icon)
+        // A dot under a favorite that's loaded and live (playing media: accent).
+        let dot = NSView()
+        dot.wantsLayer = true
+        dot.layer?.cornerRadius = 2
+        dot.layer?.backgroundColor = (row.playing ? NSColor.labelColor : NSColor.secondaryLabelColor).cgColor
+        dot.isHidden = row.sleeping && !row.playing
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dot)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Tokens.Size.favoriteTile),
             icon.centerXAnchor.constraint(equalTo: centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 18),
-            icon.heightAnchor.constraint(equalToConstant: 18),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -1),
+            icon.widthAnchor.constraint(equalToConstant: 20),
+            icon.heightAnchor.constraint(equalToConstant: 20),
+            dot.centerXAnchor.constraint(equalTo: centerXAnchor),
+            dot.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            dot.widthAnchor.constraint(equalToConstant: 4),
+            dot.heightAnchor.constraint(equalToConstant: 4),
         ])
         toolTip = row.title
         setAccessibilityRole(.button)
@@ -1024,28 +1087,68 @@ final class FavoriteTile: NSView {
     override func menu(for event: NSEvent) -> NSMenu? { menuProvider?() }
 }
 
-final class SpaceDot: NSView {
+/// A space in the footer switcher: a small squircle of the space's gradient
+/// with its icon; the current one gets a ring.
+final class SpaceChip: NSView {
     var onClick: (() -> Void)?
-    private var on = false
+    private let gradient = CAGradientLayer()
+    private let ring = CALayer()
+    private let icon = NSImageView()
+    private var isOn = false
+
+    /// CGColors don't follow appearance, so resolve against this view's.
+    private func updateRing() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            ring.borderColor = isOn ? NSColor.labelColor.withAlphaComponent(0.85).cgColor : NSColor.clear.cgColor
+        }
+    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateRing() }
+
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 3.5
         translatesAutoresizingMaskIntoConstraints = false
-        widthAnchor.constraint(equalToConstant: 7).isActive = true
-        heightAnchor.constraint(equalToConstant: 7).isActive = true
+        widthAnchor.constraint(equalToConstant: 22).isActive = true
+        heightAnchor.constraint(equalToConstant: 22).isActive = true
+        gradient.cornerRadius = 7
+        gradient.cornerCurve = .continuous
+        gradient.startPoint = CGPoint(x: 0.5, y: 1)
+        gradient.endPoint = CGPoint(x: 0.5, y: 0)
+        ring.cornerRadius = 9
+        ring.cornerCurve = .continuous
+        ring.borderWidth = 1.5
+        layer?.addSublayer(ring)
+        layer?.addSublayer(gradient)
+        icon.symbolConfiguration = .init(pointSize: 10, weight: .semibold)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(icon)
+        NSLayoutConstraint.activate([icon.centerXAnchor.constraint(equalTo: centerXAnchor), icon.centerYAnchor.constraint(equalTo: centerYAnchor)])
         setAccessibilityRole(.button)
     }
     required init?(coder: NSCoder) { fatalError() }
-    func set(on: Bool, style: SidebarStyle) {
-        self.on = on
-        setAccessibilityLabel(on ? "Current space" : "Switch space")
-        needsDisplay = true
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds.insetBy(dx: 2, dy: 2)
+        ring.frame = bounds
+        CATransaction.commit()
     }
-    override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() {
-        layer?.backgroundColor = (on ? NSColor.labelColor : NSColor.tertiaryLabelColor).cgColor
+
+    func set(page: SidebarState.Page, on: Bool, style: SidebarStyle) {
+        let t = page.theme
+        gradient.colors = [t.top, t.bottom].map { NSColor(srgbRed: $0.r, green: $0.g, blue: $0.b, alpha: 1).cgColor }
+        let light = t.top.mixed(with: t.bottom, 0.5).luminance > 0.4
+        icon.image = NSImage(systemSymbolName: page.icon, accessibilityDescription: nil)
+        icon.contentTintColor = light ? NSColor.black.withAlphaComponent(0.7) : NSColor.white.withAlphaComponent(0.9)
+        isOn = on
+        updateRing()
+        alphaValue = on ? 1 : 0.85
+        toolTip = page.name
+        setAccessibilityLabel(on ? "\(page.name), current space" : "Switch to \(page.name)")
     }
+
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
@@ -1083,6 +1186,7 @@ final class NowPlayingStrip: NSView {
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let host = NSTextField(labelWithString: "")
+    private var lastArtwork: URL?
     private let play = SidebarViewController.iconButton("pause.fill", "Pause")
     private let pip = SidebarViewController.iconButton("pip.enter", "Picture in Picture")
     private var style = SidebarStyle()
@@ -1092,8 +1196,13 @@ final class NowPlayingStrip: NSView {
         wantsLayer = true
         layer?.cornerRadius = Tokens.Radius.tile
         layer?.cornerCurve = .continuous
-        title.font = .systemFont(ofSize: 12, weight: .medium)
+        title.font = .systemFont(ofSize: 12, weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
+        icon.wantsLayer = true
+        icon.layer?.cornerRadius = 7
+        icon.layer?.cornerCurve = .continuous
+        icon.layer?.masksToBounds = true
+        host.lineBreakMode = .byTruncatingTail
         host.font = .systemFont(ofSize: 10.5)
         host.textColor = Tokens.secondaryInk
         let text = NSStackView(views: [title, host])
@@ -1110,8 +1219,8 @@ final class NowPlayingStrip: NSView {
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: leadingAnchor), row.trailingAnchor.constraint(equalTo: trailingAnchor),
             row.topAnchor.constraint(equalTo: topAnchor), row.bottomAnchor.constraint(equalTo: bottomAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 16), icon.heightAnchor.constraint(equalToConstant: 16),
-            heightAnchor.constraint(equalToConstant: 44),
+            icon.widthAnchor.constraint(equalToConstant: 30), icon.heightAnchor.constraint(equalToConstant: 30),
+            heightAnchor.constraint(equalToConstant: 50),
         ])
         text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1124,8 +1233,18 @@ final class NowPlayingStrip: NSView {
     func update(_ np: NowPlaying, style: SidebarStyle) {
         self.style = style
         title.stringValue = np.title
-        host.stringValue = np.url?.host() ?? ""
+        host.stringValue = np.artist.isEmpty ? (np.url?.host().map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 } ?? "") : np.artist
         icon.image = Favicons.shared.cached(for: np.url) ?? Favicons.placeholder()
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        if let art = np.artwork {
+            let wanted = art
+            Artwork.load(art) { [weak self] image in
+                guard let self, let image, self.lastArtwork == wanted else { return }
+                self.icon.image = image
+                self.icon.imageScaling = .scaleAxesIndependently
+            }
+        }
+        lastArtwork = np.artwork
         play.image = NSImage(systemSymbolName: np.playing ? "pause.fill" : "play.fill", accessibilityDescription: np.playing ? "Pause" : "Play")
         play.toolTip = np.playing ? "Pause" : "Play"
         pip.isHidden = !np.hasVideo
@@ -1146,4 +1265,27 @@ final class NowPlayingStrip: NSView {
 final class MenuHostView: NSView {
     var menuProvider: (() -> NSMenu?)?
     override func menu(for event: NSEvent) -> NSMenu? { menuProvider?() }
+}
+
+/// Album art for the now-playing strip: fetched without cookies, cached in memory.
+@MainActor
+enum Artwork {
+    private static var cache: [URL: NSImage] = [:]
+    private static let session: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.httpCookieStorage = nil
+        c.timeoutIntervalForRequest = 8
+        return URLSession(configuration: c)
+    }()
+
+    static func load(_ url: URL, completion: @escaping @MainActor (NSImage?) -> Void) {
+        if let image = cache[url] { return completion(image) }
+        let session = self.session
+        Task { @MainActor in
+            let data = try? await session.data(from: url).0
+            let image = data.flatMap { NSImage(data: $0) }
+            if let image { cache[url] = image; if cache.count > 32 { cache.removeAll() } }
+            completion(image)
+        }
+    }
 }

@@ -26,17 +26,38 @@ final class SwipeBenchmark: NSObject {
     }
 
     func run() {
-        guard controller.debugSidebar.debugSwipeBegin() else { print("SWIPEBENCH need ≥2 spaces"); done(); return }
+        guard controller.debugSidebar.debugSwipeBegin() else {
+            print("SWIPEBENCH could not start: visible spaces \(controller.visibleSpaces.count)"); fflush(stdout); done(); return
+        }
         let link = controller.debugSidebar.view.displayLink(target: self, selector: #selector(tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         self.link = link
+        // A covered window gets no display-link callbacks; fall back to a timer
+        // that measures main-thread cost per step (frame pacing needs a visible window).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.start == 0 else { return }
+            link.invalidate()
+            print("SWIPEBENCH window covered: timer mode (main-thread cost only)"); fflush(stdout)
+            self.timerMode = true
+            self.timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if self.finished { self.timer?.invalidate(); return }
+                    self.step(now: CACurrentMediaTime(), link: nil)
+                }
+            }
+        }
     }
 
     private var settleStart: CFTimeInterval = 0
+    private var timerMode = false
+    private var timer: Timer?
+    private var finished = false
 
-    @objc private func tick(_ link: CADisplayLink) {
-        let now = link.timestamp
+    @objc private func tick(_ link: CADisplayLink) { step(now: link.timestamp, link: link) }
+
+    private func step(now: CFTimeInterval, link: CADisplayLink?) {
         if start == 0 { start = now; last = now }
         intervals.append((now - last) * 1000)
         last = now
@@ -50,8 +71,16 @@ final class SwipeBenchmark: NSObject {
                 if phase < 2, controller.debugSidebar.debugSwipeBegin() {
                     start = 0; intervals = []; work = []
                 } else {
-                    link.invalidate()
-                    measureKeyboardSwitch()
+                    link?.invalidate()
+                    if timerMode {
+                        let t0 = CACurrentMediaTime()
+                        controller.switchSpace(1)
+                        print(String(format: "SWIPEBENCH keyboard switch main-thread cost %.2f ms", (CACurrentMediaTime() - t0) * 1000))
+                        finished = true
+                        fflush(stdout)
+                    } else {
+                        measureKeyboardSwitch()
+                    }
                 }
             }
             return

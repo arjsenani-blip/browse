@@ -64,6 +64,32 @@ public final class Favicons {
         }
     }
 
+    private static var darkness: [ObjectIdentifier: Bool] = [:]
+
+    /// True for icons that are mostly dark ink (they need a light plate on dark themes).
+    public static func isDark(_ image: NSImage) -> Bool {
+        let key = ObjectIdentifier(image)
+        if let known = darkness[key] { return known }
+        var dark = false
+        if let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            let w = 16, h = 16
+            var px = [UInt8](repeating: 0, count: w * h * 4)
+            if let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+                var lum = 0.0, weight = 0.0
+                for i in stride(from: 0, to: px.count, by: 4) where px[i + 3] > 40 {
+                    let a = Double(px[i + 3]) / 255
+                    lum += (0.2126 * Double(px[i]) + 0.7152 * Double(px[i + 1]) + 0.0722 * Double(px[i + 2])) / 255 / a
+                    weight += 1
+                }
+                dark = weight > 8 && lum / weight < 0.22
+            }
+        }
+        darkness[key] = dark
+        return dark
+    }
+
     /// A neutral placeholder for sites without an icon: the system globe,
     /// tinted secondary so it reads in light and dark.
     public static func placeholder(hue: Double? = nil) -> NSImage {

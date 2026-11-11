@@ -95,6 +95,10 @@ public struct Space: Codable, Sendable, Identifiable, Equatable {
     /// The space's gradient. nil (older sessions) derives one from `accentHue`.
     public var theme: SpaceTheme?
     public var resolvedTheme: SpaceTheme { theme ?? .from(hue: accentHue) }
+    /// SF Symbol for the space's chip; nil picks one from `Space.icons` by position.
+    public var icon: String?
+    public static let icons = ["house", "briefcase", "flask", "book.closed", "paintpalette", "gamecontroller",
+                               "music.note", "airplane", "leaf", "graduationcap", "cart", "heart"]
 
     public init(
         id: UUID = UUID(),
