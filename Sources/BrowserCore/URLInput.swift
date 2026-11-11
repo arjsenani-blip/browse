@@ -2,7 +2,7 @@ import Foundation
 
 /// Turns what the user typed into a URL to load: a URL, a bare host, or a search.
 public enum URLInput {
-    public static func resolve(_ raw: String, searchTemplate: String = "https://duckduckgo.com/?q=%s") -> URL? {
+    public static func resolve(_ raw: String, searchTemplate: String = SearchEngine.current.template) -> URL? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
 

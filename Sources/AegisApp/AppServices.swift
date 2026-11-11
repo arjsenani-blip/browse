@@ -41,6 +41,9 @@ final class AppServices {
         try? FileManager.default.createDirectory(at: AppPaths.support, withIntermediateDirectories: true)
         store = BrowserStore(snapshot: sessionStore.load())
         runtime = TabRuntime(store: store)
+        // Settings → Search & Tabs "sleep after" (it used to reset every launch).
+        let sleepMinutes = UserDefaults.standard.double(forKey: "sleepMinutes")
+        if sleepMinutes > 0 { runtime.hibernation.idleTimeout = sleepMinutes * 60 }
         history = try? HistoryStore(url: AppPaths.support.appending(path: "history.sqlite"))
         engine = PaletteEngine(history: history)
         if let saved = UserDefaults.standard.data(forKey: "privacy"), let p = try? JSONDecoder().decode(CodablePrivacy.self, from: saved) {

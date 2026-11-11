@@ -2,6 +2,17 @@ import Foundation
 import Testing
 @testable import BrowserCore
 
+@Suite struct SearchEngineTests {
+    @Test func everyEngineBuildsAnHTTPSSearchURL() {
+        for engine in SearchEngine.allCases {
+            let url = URLInput.resolve("swift concurrency", searchTemplate: engine.template)
+            #expect(url?.scheme == "https", "\(engine)")
+            #expect(url?.host() == engine.host, "\(engine)")
+            #expect(url?.absoluteString.contains("swift%20concurrency") == true, "\(engine)")
+        }
+    }
+}
+
 @Suite struct URLInputTests {
     @Test(arguments: [
         ("example.com", "https://example.com"),
@@ -87,6 +98,13 @@ import Testing
         #expect(store.currentSpaceID == store.spaces[0].id)
         #expect(store.removeSpace(store.spaces[0].id).isEmpty)   // last space stays
         #expect(store.spaces.count == 1)
+    }
+
+    @Test func newSpacesFollowTheArchiveSetting() {
+        let store = BrowserStore()
+        store.setArchiveInterval(7 * 24 * 3600)
+        let work = store.addSpace(name: "Work", accentHue: 0.6, newProfile: false)
+        #expect(work.archiveAfter == 7 * 24 * 3600)
     }
 
     @Test func removingASpaceNeverLandsOnAPrivateOne() {

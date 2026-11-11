@@ -23,7 +23,12 @@ public struct OmniboxRanker: Sendable {
     public var scopedLimit = 50
     /// History rows shown for an empty query.
     public var emptyQueryTopSites = 6
-    public var searchTemplate = "https://duckduckgo.com/?q=%s"
+    /// The Settings choice unless a caller (tests) pins one.
+    public var searchTemplate: String {
+        get { pinnedSearchTemplate ?? SearchEngine.current.template }
+        set { pinnedSearchTemplate = newValue }
+    }
+    private var pinnedSearchTemplate: String?
 
     public init() {}
 

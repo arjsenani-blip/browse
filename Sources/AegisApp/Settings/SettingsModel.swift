@@ -72,7 +72,14 @@ final class SettingsModel {
     // Tabs
     var tabsOnTop: Bool { didSet { if tabsOnTop != oldValue { services.forEachController { $0.tabsOnTop = tabsOnTop } } } }
     var archiveHours: Double { didSet { services.store.setArchiveInterval(archiveHours * 3600) } }
-    var sleepMinutes: Double { didSet { services.runtime.hibernation.idleTimeout = sleepMinutes * 60 } }
+    var sleepMinutes: Double {
+        didSet {
+            services.runtime.hibernation.idleTimeout = sleepMinutes * 60
+            UserDefaults.standard.set(sleepMinutes, forKey: "sleepMinutes")
+        }
+    }
+
+    var searchEngine: SearchEngine = SearchEngine.current { didSet { SearchEngine.current = searchEngine } }
 
     // Spaces pane selection
     var selectedSpaceID: UUID?

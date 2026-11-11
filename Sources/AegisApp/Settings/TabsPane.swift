@@ -40,8 +40,12 @@ struct TabsPane: View {
                 }
             }
             SettingsCard(title: "Search", help: "For anything that isn't a web address.", fillHeight: true) {
-                SettingsRow(title: "Search engine", help: "Results open on duckduckgo.com.", systemImage: "magnifyingglass") {
-                    SettingsBadge(text: "DuckDuckGo")
+                SettingsRow(title: "Search engine", help: "Results open on \(model.searchEngine.host).", systemImage: "magnifyingglass") {
+                    Picker("Search engine", selection: $model.searchEngine) {
+                        ForEach(SearchEngine.allCases) { Text($0.name).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
                 }
                 Divider()
                 SettingsRow(title: "Suggestions", help: "From your tabs and history only.", systemImage: "text.magnifyingglass") {

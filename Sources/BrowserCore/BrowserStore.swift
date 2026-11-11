@@ -123,7 +123,9 @@ public final class BrowserStore {
             profiles.append(profile)
             profileID = profile.id
         }
-        let space = Space(name: name, accentHue: accentHue, profileID: profileID)
+        var space = Space(name: name, accentHue: accentHue, profileID: profileID)
+        // Settings' "archive after" is one app-wide choice; new spaces follow it.
+        if let interval = spaces.first?.archiveAfter { space.archiveAfter = interval }
         spaces.append(space)
         return space
     }
