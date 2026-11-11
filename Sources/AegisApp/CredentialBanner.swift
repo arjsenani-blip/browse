@@ -7,26 +7,32 @@ import Credentials
 enum CredentialBanner {
     private static weak var current: NSView?
 
-    static func offerFill(suggestion: CredentialSuggestion, count: Int, in window: NSWindow?, fill: @escaping () -> Void) {
+    /// Shown in front of a password field on a plain-http page: whatever is
+    /// typed or filled there crosses the network unencrypted.
+    static let insecureNote = " This page isn\u{2019}t secure: it\u{2019}s sent unencrypted."
+
+    static func offerFill(suggestion: CredentialSuggestion, count: Int, insecure: Bool = false, in window: NSWindow?, fill: @escaping () -> Void) {
         let more = count > 1 ? " (+\(count - 1) more)" : ""
-        show(in: window, symbol: "key.fill",
-             text: "Fill password for \(suggestion.credential.username)\(more)?",
-             primary: "Fill", secondary: "Not Now", timeout: 12, primaryAction: fill)
+        show(in: window, symbol: insecure ? "exclamationmark.triangle.fill" : "key.fill",
+             text: "Fill password for \(suggestion.credential.username)\(more)?" + (insecure ? insecureNote : ""),
+             primary: insecure ? "Fill Anyway" : "Fill", secondary: "Not Now", timeout: insecure ? 20 : 12, primaryAction: fill)
     }
 
-    static func offerSave(_ decision: SubmitDecision, in window: NSWindow?, credentials: CredentialsCoordinator, password: String) {
+    static func offerSave(_ decision: SubmitDecision, insecure: Bool = false, in window: NSWindow?, credentials: CredentialsCoordinator, password: String) {
+        let note = insecure ? insecureNote : ""
+        let symbol = insecure ? "exclamationmark.triangle.fill" : "key"
         switch decision {
         case .nothing:
             return
         case .offerSave(let host, let username):
-            show(in: window, symbol: "key",
-                 text: "Save password for \(username) on \(host)?",
+            show(in: window, symbol: symbol,
+                 text: "Save password for \(username) on \(host)?" + note,
                  primary: "Save", secondary: "Never for This Site", timeout: 20,
                  primaryAction: { Task { try? await credentials.confirmSave(host: host, username: username, password: password) } },
                  secondaryAction: { Task { await credentials.neverSave(host: host) } })
         case .offerUpdate(let id, let host, let username):
-            show(in: window, symbol: "key",
-                 text: "Update saved password for \(username) on \(host)?",
+            show(in: window, symbol: symbol,
+                 text: "Update saved password for \(username) on \(host)?" + note,
                  primary: "Update", secondary: "Not Now", timeout: 20,
                  primaryAction: { Task { try? await credentials.confirmUpdate(credentialID: id, password: password) } })
         }
@@ -42,8 +48,8 @@ enum CredentialBanner {
         banner.wantsLayer = true
         banner.layer?.cornerRadius = 14
         banner.layer?.cornerCurve = .continuous
-        let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!)
-        icon.contentTintColor = .secondaryLabelColor
+        let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
+        icon.contentTintColor = symbol.hasPrefix("exclamationmark") ? .systemOrange : .secondaryLabelColor
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 13)
         label.lineBreakMode = .byTruncatingMiddle

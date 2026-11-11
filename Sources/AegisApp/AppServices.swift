@@ -246,6 +246,15 @@ final class AppServices {
         PaletteSource(services: self, controller: controller, mode: mode)
     }
 
+    /// The window whose space holds this tab (banners belong beside their
+    /// page, not in whichever window happens to be in front).
+    func window(showing tabID: TabID) -> NSWindow? {
+        let space = store.space(containing: tabID)?.id
+        return controllers.first { $0.windowSpace.id == space }?.window
+            ?? controllers.first { c in c.visibleSpaces.contains { $0.id == space } }?.window
+            ?? frontController?.window
+    }
+
     func isPrivate(_ tabID: TabID) -> Bool {
         guard let space = store.space(containing: tabID) else { return false }
         return privateProfiles.contains(space.profileID)
@@ -257,12 +266,15 @@ final class AppServices {
 extension AppServices: WebTabDelegate {
     func webTabDidChange(_ tab: WebTab) {
         extensions.webTabDidChange(tab)
-        if let url = tab.url {
-            store.update(tab.id) { record in
+        store.update(tab.id) { record in
+            // A failed HTTPS upgrade (or an aborted load) briefly reports
+            // about:blank; never let it overwrite the address the tab is for,
+            // or the session restores a blank tab.
+            if let url = tab.url, url.scheme != "about" || record.url == nil {
                 record.url = url
                 if !tab.title.isEmpty { record.title = tab.title }
-                record.activity = tab.activity
             }
+            if record.activity != tab.activity { record.activity = tab.activity }
         }
         for c in controllers where c.store.currentSpace.selected == tab.id { c.scheduleRefresh() }
     }
@@ -345,7 +357,8 @@ extension AppServices: WebTabDelegate {
                 guard let self else { return }
                 let suggestions = await credentials.didFindForms(host: host)
                 guard let first = suggestions.first else { return }
-                CredentialBanner.offerFill(suggestion: first, count: suggestions.count, in: frontController?.window) { [weak self] in
+                CredentialBanner.offerFill(suggestion: first, count: suggestions.count, insecure: tab.url?.scheme != "https",
+                                           in: window(showing: tab.id)) { [weak self] in
                     guard let self else { return }
                     Task {
                         guard let values = await self.credentials.fillValues(for: first) else { return }
@@ -359,7 +372,8 @@ extension AppServices: WebTabDelegate {
                 let t0 = Date()
                 let decision = await credentials.didSubmit(host: host, username: username, password: password)
                 if CommandLine.arguments.contains("--snapshot") { print("AUTOFILL decision \(decision) in \(Date().timeIntervalSince(t0))s"); fflush(stdout) }
-                CredentialBanner.offerSave(decision, in: frontController?.window, credentials: credentials, password: password)
+                CredentialBanner.offerSave(decision, insecure: tab.url?.scheme != "https", in: window(showing: tab.id),
+                                           credentials: credentials, password: password)
             }
         default: break
         }

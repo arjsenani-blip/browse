@@ -320,7 +320,10 @@ extension WebTab: WKUIDelegate {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = parameters.allowsDirectories
-        return panel.runModal() == .OK ? panel.urls : nil
+        // A sheet on the tab's window, like page dialogs: an app-modal panel
+        // would freeze every other window. Background tabs get nothing.
+        guard let window = webView.window, window.attachedSheet == nil else { return nil }
+        return await panel.beginSheetModal(for: window) == .OK ? panel.urls : nil
     }
 }
 
