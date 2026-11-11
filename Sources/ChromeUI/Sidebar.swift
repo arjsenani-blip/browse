@@ -162,7 +162,7 @@ public final class SidebarViewController: NSViewController {
 
         let spaceMenuHost = MenuHostView()
         spaceMenuHost.menuProvider = { [weak self] in self?.delegate?.sidebarSpaceMenu() }
-        spaceDots.spacing = 5
+        spaceDots.spacing = 8
         // Just the chips: the space's name is in each chip's tooltip and in Settings.
         let spaceGroup = NSStackView(views: [spaceDots])
         spaceGroup.spacing = 8
@@ -192,8 +192,22 @@ public final class SidebarViewController: NSViewController {
             libraryBadge.heightAnchor.constraint(equalToConstant: 12),
             libraryBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 12),
         ])
-        let footer = NSStackView(views: [spaceMenuHost, NSView(), libraryButton, newTab])
-        footer.spacing = 8
+        // Arc's layout: library on the left, spaces centred, "+" on the right.
+        let footer = NSView()
+        for v in [libraryButton, spaceMenuHost, newTab] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            footer.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            libraryButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
+            libraryButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            newTab.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
+            newTab.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            spaceMenuHost.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
+            spaceMenuHost.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            spaceMenuHost.leadingAnchor.constraint(greaterThanOrEqualTo: libraryButton.trailingAnchor, constant: 10),
+            spaceMenuHost.trailingAnchor.constraint(lessThanOrEqualTo: newTab.leadingAnchor, constant: -10),
+        ])
         nowPlayingView.onToggle = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarToggleMedia(id) } }
         nowPlayingView.onPiP = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarPictureInPicture(id) } }
         nowPlayingView.onOpen = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarSelect(id) } }
@@ -220,11 +234,11 @@ public final class SidebarViewController: NSViewController {
             pager.bottomAnchor.constraint(equalTo: nowPlayingView.topAnchor, constant: -6),
             nowPlayingView.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: pad),
             nowPlayingView.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -pad),
-            nowPlayingView.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
-            footer.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: pad + 10),
-            footer.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -pad - 4),
-            footer.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -12),
-            footer.heightAnchor.constraint(equalToConstant: 24),
+            nowPlayingView.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -12),
+            footer.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: pad + 6),
+            footer.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -pad - 6),
+            footer.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -14),
+            footer.heightAnchor.constraint(equalToConstant: 30),
         ])
         view = host
     }
