@@ -11,11 +11,12 @@ Done:
 
 Done (QA round 1, all 15 agreed items): see docs/qa-round1.md.
 
+Done (Checker audit): reader pill / dark-mode default / links open in the tab / ⌘± text size / lighter underlines; search-engine picker; http password warnings; about:blank never overwrites a tab's URL; private-space and folder cross-profile leaks; session restore hardening; menu shortcut fixes (⌃⇧Tab, ⌘=, ⌘G); see git log.
+
 Next (below the line from QA):
-- Reader: floating Aa/theme pill, lighter underlines, indicator in the URL pill; strip stray icons.
-- Settings: fill the Search & Tabs void; move passkeys out of a dead tile; Arc import row under Spaces.
+- Reader: indicator in the URL pill.
+- Settings: Tab layout card still half empty; move passkeys out of a dead tile; Arc import row under Spaces.
 - Fingerprint shim: native-looking toString; noise on export only (pixel readback).
-- Warn before saving a password on http://; failed HTTPS upgrade shouldn't save about:blank.
 - Delight: live favorites (unread badge, hover peek), freeze-space chip showing memory freed, blocked-count on the shield, time-of-day themes.
 - Run a QA round 2 (Rigor + Taste) on the new build.
 
