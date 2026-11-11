@@ -136,6 +136,36 @@ enum DebugSnapshot {
                     bench.run()
                 }
             }
+            if args.contains("--stress"), let c = services.frontController {
+                // Crash hunt: rapid opens, closes, space switches, folder churn,
+                // a private window and deleting the current space mid-animation.
+                Task { @MainActor in
+                    for i in 0..<40 {
+                        switch i % 8 {
+                        case 0: c.navigate(to: URL(string: "https://example.com/?s=\(i)")!, newTab: true)
+                        case 1: c.switchSpace(1)
+                        case 2: c.closeCurrentTab()
+                        case 3: c.newFolder(); if let f = c.windowSpace.folders.first, let t = c.windowSpace.today.first { services.store.moveTab(t, toFolder: f.id) }
+                        case 4: c.switchSpace(-1); c.cycleTab(1)
+                        case 5: if let f = c.windowSpace.folders.first { services.store.deleteFolder(f.id, closeTabs: false) }
+                        case 6: c.reopenClosedTab(); c.toggleReader()
+                        default: c.sidebarClearToday()
+                        }
+                        try? await Task.sleep(for: .milliseconds(60))
+                    }
+                    services.newPrivateWindow()
+                    services.frontController?.navigate(to: URL(string: "https://example.org")!, newTab: true)
+                    try? await Task.sleep(for: .milliseconds(200))
+                    services.frontController?.window?.close()
+                    let extra = services.store.addSpace(name: "Doomed", accentHue: 0.1, newProfile: true)
+                    services.store.openTab(URL(string: "https://example.net"), in: extra.id)
+                    c.sidebarSwitchSpace(c.visibleSpaces.firstIndex { $0.id == extra.id } ?? 0)
+                    c.deleteSpace(extra.id, confirm: false)
+                    c.switchSpace(1)
+                    print("STRESS done spaces=\(services.store.spaces.count) tabs=\(services.store.tabs.count) live=\(services.runtime.liveCount) current-visible=\(c.visibleSpaces.contains { $0.id == services.store.currentSpaceID })")
+                    fflush(stdout)
+                }
+            }
             if args.contains("--playall") {
                 for space in services.store.spaces { for id in space.allTabs { services.runtime.tab(id)?.togglePlayback() } }
             }

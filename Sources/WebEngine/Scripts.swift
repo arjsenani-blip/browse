@@ -135,7 +135,8 @@ enum MediaScript {
         timer = setTimeout(() => {
           const els = [...document.querySelectorAll('video, audio')];
           const playing = els.find(m => !m.paused && !m.ended && m.readyState > 2 && !m.muted && m.volume > 0);
-          const state = playing ? 'playing' : (els.some(m => !m.ended && m.currentTime > 0) ? 'paused' : 'none');
+          // Muted autoplay (hero loops, previews) is decoration, not something to resume.
+          const state = playing ? 'playing' : (els.some(m => !m.ended && m.currentTime > 0 && !m.muted && m.volume > 0) ? 'paused' : 'none');
           const kind = playing ? (playing.videoWidth > 0 ? 'video' : 'audio') : '';
           const md = navigator.mediaSession && navigator.mediaSession.metadata;
           const og = document.querySelector('meta[property="og:image"]');
