@@ -142,3 +142,44 @@ import Testing
         #expect(Set(out) == Set(tabs.suffix(3).map(\.id)))  // the oldest three
     }
 }
+
+@Suite @MainActor struct SessionSafetyTests {
+    func tempDir() -> URL {
+        let d = FileManager.default.temporaryDirectory.appending(path: "aegis-session-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    @Test func unreadableSessionIsSetAsideNotOverwritten() throws {
+        let dir = tempDir()
+        let store = SessionStore(directory: dir)
+        try Data("not json".utf8).write(to: store.url)
+        #expect(store.load() == nil)
+        // The corrupt file was moved aside, so a fresh save can't destroy it.
+        #expect(FileManager.default.fileExists(atPath: dir.appending(path: "session.unreadable.json").path))
+    }
+
+    @Test func previousCopyRecoversAfterCorruption() throws {
+        let dir = tempDir()
+        let store = SessionStore(directory: dir)
+        let s = BrowserStore()
+        s.openTab(URL(string: "https://first.example"))
+        try store.save(s.snapshot())
+        s.openTab(URL(string: "https://second.example"))
+        try store.save(s.snapshot())            // first save becomes session.prev.json
+        try Data("garbage".utf8).write(to: store.url)
+        let recovered = store.load()
+        #expect(recovered?.tabs.count == 1)     // the previous good session
+    }
+
+    @Test func privateSpacesNeverPersistOrReopen() {
+        let s = BrowserStore()
+        let priv = s.addSpace(name: "Private", accentHue: 0.7, newProfile: true)
+        s.ephemeralSpaces.insert(priv.id)
+        let t = s.openTab(URL(string: "https://secret.example"), in: priv.id)
+        #expect(!s.snapshot().spaces.contains { $0.id == priv.id })
+        #expect(!s.snapshot().tabs.contains { $0.id == t })
+        s.close(t)
+        #expect(s.closed.isEmpty)
+    }
+}

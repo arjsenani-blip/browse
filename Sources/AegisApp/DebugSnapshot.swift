@@ -33,6 +33,27 @@ enum DebugSnapshot {
                 fflush(stdout)
             }
         }
+        if args.contains("--private-test") {
+            // Private window isolation check (QA finding R2).
+            let normal = services.frontController
+            services.newPrivateWindow()
+            let priv = services.frontController
+            priv?.navigate(to: URL(string: "https://example.org/?secret-private-url")!, newTab: true, typed: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                let pid = priv?.spaceID
+                let leaked = normal?.visibleSpaces.contains { $0.id == pid } ?? false
+                print("PRIVTEST normal window sees private space: \(leaked)")
+                print("PRIVTEST private window sees: \(priv?.visibleSpaces.map(\.name) ?? [])")
+                if let id = priv?.windowSpace.selected { priv?.closeTab(id) }
+                print("PRIVTEST closed-list has private tab: \(services.store.closed.contains { $0.url?.query?.contains("secret") == true })")
+                print("PRIVTEST snapshot includes private: \(services.store.snapshot().spaces.contains { $0.id == pid })")
+                priv?.window?.close()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    print("PRIVTEST after close, private space exists: \(services.store.spaces.contains { $0.id == pid }) spaces=\(services.store.spaces.map(\.name))")
+                    fflush(stdout)
+                }
+            }
+        }
         if let k = args.firstIndex(of: "--space2-open"), k + 1 < args.count, let url = URL(string: args[k + 1]) {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay / 2) {
                 services.frontController?.newSpace()

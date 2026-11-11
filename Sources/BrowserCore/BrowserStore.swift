@@ -11,6 +11,8 @@ public final class BrowserStore {
     public private(set) var tabs: [TabID: TabRecord]
     public private(set) var archive: [ArchivedTab]
     public var currentSpaceID: UUID
+    /// Spaces that must never persist or leak (private windows).
+    public var ephemeralSpaces: Set<UUID> = []
     /// Recently closed, newest last, for ⇧⌘T.
     public private(set) var closed: [TabRecord] = []
 
@@ -79,8 +81,11 @@ public final class BrowserStore {
             }
         }
         tabs[id] = nil
-        closed.append(tab)
-        if closed.count > 50 { closed.removeFirst() }
+        // Private tabs are never reopenable (⇧⌘T would carry them into a normal space).
+        if !ephemeralSpaces.contains(owner.id) {
+            closed.append(tab)
+            if closed.count > 50 { closed.removeFirst() }
+        }
     }
 
     @discardableResult
@@ -137,6 +142,7 @@ public final class BrowserStore {
         let removed = spaces[i].allTabs
         for t in removed { tabs[t] = nil }
         let profile = spaces[i].profileID
+        ephemeralSpaces.remove(id)
         spaces.remove(at: i)
         if !spaces.contains(where: { $0.profileID == profile }) { profiles.removeAll { $0.id == profile } }
         if currentSpaceID == id { currentSpaceID = spaces[max(0, i - 1)].id }
@@ -186,9 +192,14 @@ public final class BrowserStore {
     }
 
     public func snapshot() -> SessionSnapshot {
-        var saved = Array(tabs.values)
+        let keptSpaces = spaces.filter { !ephemeralSpaces.contains($0.id) }
+        let keptTabIDs = Set(keptSpaces.flatMap(\.allTabs))
+        let keptProfiles = Set(keptSpaces.map(\.profileID))
+        var saved = tabs.values.filter { keptTabIDs.contains($0.id) }
         for i in saved.indices { saved[i].activity = [] }
-        return SessionSnapshot(profiles: profiles, spaces: spaces, tabs: saved, archive: archive, currentSpaceID: currentSpaceID)
+        let current = keptSpaces.contains { $0.id == currentSpaceID } ? currentSpaceID : (keptSpaces.first?.id ?? currentSpaceID)
+        return SessionSnapshot(profiles: profiles.filter { keptProfiles.contains($0.id) }, spaces: keptSpaces, tabs: saved,
+                               archive: archive.filter { !ephemeralSpaces.contains($0.spaceID) }, currentSpaceID: current)
     }
 
     private func mutateSpace(_ id: UUID, _ change: (inout Space) -> Void) {

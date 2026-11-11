@@ -11,6 +11,10 @@ public protocol WebTabDelegate: AnyObject {
     func webTab(_ tab: WebTab, openInNewTab request: URLRequest, background: Bool, configuration: WKWebViewConfiguration?) -> WKWebView?
     func webTabDidRequestClose(_ tab: WebTab)
     func webTab(_ tab: WebTab, autofillMessage body: [String: Any])
+    /// The page finished loading (title is final). History is recorded on commit, not here.
+    func webTabDidFinish(_ tab: WebTab, url: URL, title: String?)
+    /// The tab's web content process died (crash or killed under memory pressure).
+    func webTabProcessDidTerminate(_ tab: WebTab)
 }
 
 /// The live half of a tab: a WKWebView that can be put to sleep and woken.
@@ -47,6 +51,8 @@ public final class WebTab: NSObject {
     public private(set) var snapshot: NSImage?
 
     private var observations: [NSKeyValueObservation] = []
+    private var dialogTimes: [Date] = []
+    private var dialogsSuppressed = false
     private var pendingTyped = false
 
     public init(id: TabID, context: ProfileContext) {
@@ -201,7 +207,8 @@ public struct ReaderArticle: Sendable {
 extension WebTab: WKNavigationDelegate {
     public func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, preferences: WKWebpagePreferences) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
         let modifiers = action.modifierFlags
-        if action.navigationType == .linkActivated, modifiers.contains(.command) {
+        // ⌘-click or middle-click: open in a new tab (background unless ⇧).
+        if action.navigationType == .linkActivated, modifiers.contains(.command) || action.buttonNumber == 2 {
             _ = delegate?.webTab(self, openInNewTab: action.request, background: !modifiers.contains(.shift), configuration: nil)
             return (.cancel, preferences)
         }
@@ -230,6 +237,8 @@ extension WebTab: WKNavigationDelegate {
 
     public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         isReaderable = false
+        dialogsSuppressed = false
+        dialogTimes = []
         changed()
     }
 
@@ -240,21 +249,22 @@ extension WebTab: WKNavigationDelegate {
     }
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if let url = webView.url { delegate?.webTab(self, didCommit: url, title: webView.title, typed: false) }
+        if let url = webView.url { delegate?.webTabDidFinish(self, url: url, title: webView.title) }
         probeReader()
     }
 
     public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        // Crashed or killed under pressure: reload lazily when shown.
-        webView.reload()
+        // The app decides: background tabs sleep (reload when shown), the
+        // visible tab reloads with a retry cap. Never an unconditional loop.
+        delegate?.webTabProcessDidTerminate(self)
     }
 
     public func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        DownloadCenter.shared.track(download)
+        DownloadCenter.shared.track(download, ephemeral: !context.dataStore.isPersistent)
     }
 
     public func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        DownloadCenter.shared.track(download)
+        DownloadCenter.shared.track(download, ephemeral: !context.dataStore.isPersistent)
     }
 }
 
@@ -270,19 +280,31 @@ extension WebTab: WKUIDelegate {
     }
 
     public func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
-        let alert = NSAlert()
-        alert.messageText = frame.securityOrigin.host
-        alert.informativeText = message
-        alert.runModal()
+        _ = await presentDialog(webView, title: frame.securityOrigin.host, message: message, buttons: ["OK"])
     }
 
     public func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async -> Bool {
+        await presentDialog(webView, title: frame.securityOrigin.host, message: message, buttons: ["OK", "Cancel"]) == .alertFirstButtonReturn
+    }
+
+    /// Page dialogs are sheets on the tab's own window, never app-modal: a
+    /// background tab (no window) can't interrupt, and a page that loops
+    /// dialogs can be silenced.
+    private func presentDialog(_ webView: WKWebView, title: String, message: String, buttons: [String]) async -> NSApplication.ModalResponse {
+        guard !dialogsSuppressed, let window = webView.window, window.attachedSheet == nil else { return .alertSecondButtonReturn }
         let alert = NSAlert()
-        alert.messageText = frame.securityOrigin.host
+        alert.messageText = title.isEmpty ? "This page says" : "\(title) says"
         alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        buttons.forEach { alert.addButton(withTitle: $0) }
+        let now = Date()
+        dialogTimes = dialogTimes.filter { now.timeIntervalSince($0) < 15 } + [now]
+        if dialogTimes.count > 2 {
+            alert.showsSuppressionButton = true
+            alert.suppressionButton?.title = "Don't show more dialogs from this page"
+        }
+        let response = await alert.beginSheetModal(for: window)
+        if alert.suppressionButton?.state == .on { dialogsSuppressed = true }
+        return response
     }
 
     public func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo) async -> [URL]? {

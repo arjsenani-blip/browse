@@ -84,22 +84,32 @@ final class AppServices {
         controllers.first { $0.window?.isKeyWindow == true } ?? controllers.first { $0.window?.isMainWindow == true } ?? controllers.last
     }
 
-    func newWindow() {
-        let c = BrowserWindowController(app: self)
+    func newWindow(spaceID: UUID? = nil, isPrivate: Bool = false) {
+        let normal = store.spaces.first { $0.id == store.currentSpaceID && !store.ephemeralSpaces.contains($0.id) }
+            ?? store.spaces.first { !store.ephemeralSpaces.contains($0.id) }
+        let c = BrowserWindowController(app: self, spaceID: spaceID ?? normal?.id, isPrivate: isPrivate)
+        if let frame = frontController?.window?.frame {
+            // Cascade, so a new window doesn't land exactly on top of the last one.
+            c.window?.setFrameOrigin(NSPoint(x: frame.minX + 28, y: frame.minY - 28))
+        }
         controllers.append(c)
         c.showWindow(nil)
-        if store.currentSpace.allTabs.isEmpty { c.openPalette(.newTab) }
+        if c.windowSpace.allTabs.isEmpty { c.openPalette(.newTab) }
     }
 
     func newPrivateWindow() {
-        // A private window is a fresh, non-persistent space; it is never saved.
-        let space = store.addSpace(name: "Private", accentHue: 0.75, newProfile: true)
+        // A private window owns one non-persistent space: never saved, never
+        // shown in other windows, torn down with its cookies when it closes.
+        let space = store.addSpace(name: "Private", accentHue: 0.68, newProfile: true)
         privateProfiles.insert(space.profileID)
         runtime.ephemeralProfiles.insert(space.profileID)
+        store.ephemeralSpaces.insert(space.id)
+        if let midnight = SpaceTheme.presets.first(where: { $0.name == "Midnight" })?.theme { store.setTheme(midnight, for: space.id) }
         store.currentSpaceID = space.id
-        newWindow()
+        newWindow(spaceID: space.id, isPrivate: true)
     }
     var privateProfiles: Set<UUID> = []
+    private var crashTimes: [TabID: [Date]] = [:]
 
     func forEachController(_ body: (BrowserWindowController) -> Void) { controllers.forEach(body) }
 
@@ -114,6 +124,14 @@ final class AppServices {
 
     func windowClosed(_ c: BrowserWindowController) {
         controllers.removeAll { $0 === c }
+        if c.isPrivateWindow, let sid = c.spaceID, let space = store.spaces.first(where: { $0.id == sid }) {
+            let profile = space.profileID
+            for id in space.allTabs { runtime.discard(id) }
+            store.removeSpace(sid)
+            privateProfiles.remove(profile)
+            DownloadCenter.shared.forgetEphemeral()
+            Task { await runtime.removeProfile(profile) }
+        }
         saveSession()
     }
 
@@ -259,6 +277,29 @@ extension AppServices: WebTabDelegate {
         // this configuration (anything else raises and aborts the app). It
         // loads the request itself, and keeps window.opener working.
         return runtime.adopt(id, configuration: configuration)
+    }
+
+    func webTabDidFinish(_ tab: WebTab, url: URL, title: String?) {
+        guard !isPrivate(tab.id), let history, let title, !title.isEmpty, url.scheme == "http" || url.scheme == "https" else { return }
+        Task.detached(priority: .utility) { try? await history.updateTitle(url: url, title: title) }
+    }
+
+    func webTabProcessDidTerminate(_ tab: WebTab) {
+        let id = tab.id
+        if runtime.foreground.contains(id) {
+            let now = Date()
+            crashTimes[id, default: []].append(now)
+            crashTimes[id] = crashTimes[id]?.filter { now.timeIntervalSince($0) < 60 }
+            if (crashTimes[id]?.count ?? 0) <= 3 {
+                tab.reload()
+            } else {
+                Toast.show("This page keeps crashing, so Aegis stopped reloading it", in: frontController?.window)
+                Task { await runtime.sleep(id) }
+            }
+        } else {
+            // Background: free it now; it reloads from its saved state when shown.
+            Task { await runtime.sleep(id) }
+        }
     }
 
     func webTabDidRequestClose(_ tab: WebTab) {

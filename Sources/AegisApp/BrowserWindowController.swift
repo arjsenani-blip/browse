@@ -26,6 +26,40 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private let background = ThemeBackgroundView()
     private var cardTrailing: NSLayoutConstraint!
     private var lastSpaceID: UUID?
+    /// The space this window shows. Each window keeps its own; the store's
+    /// `currentSpaceID` follows whichever window is key.
+    var spaceID: UUID?
+    /// A private window shows only its own private space and is torn down on close.
+    var isPrivateWindow = false
+
+    /// Spaces this window can show: a private window sees only its space;
+    /// normal windows never see private spaces.
+    var visibleSpaces: [Space] {
+        isPrivateWindow
+            ? store.spaces.filter { $0.id == spaceID }
+            : store.spaces.filter { !store.ephemeralSpaces.contains($0.id) }
+    }
+
+    var windowSpace: Space {
+        let visible = visibleSpaces
+        return visible.first { $0.id == spaceID } ?? visible.first ?? store.currentSpace
+    }
+
+    /// The key window follows store changes to the current space; others keep theirs.
+    private func syncSpace() {
+        let visible = visibleSpaces
+        if window?.isKeyWindow ?? true, visible.contains(where: { $0.id == store.currentSpaceID }) {
+            spaceID = store.currentSpaceID
+        }
+        if spaceID == nil || !visible.contains(where: { $0.id == spaceID }) {
+            spaceID = visible.first?.id
+        }
+    }
+
+    private func setWindowSpace(_ id: UUID) {
+        spaceID = id
+        store.currentSpaceID = id
+    }
     private var warmWork: DispatchWorkItem?
     private var cardBottom: NSLayoutConstraint!
     private var extensionButtons: [String: NSButton] = [:]
@@ -46,8 +80,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     enum PaletteMode { case newTab, navigate, command }
 
-    init(app: AppServices) {
+    init(app: AppServices, spaceID: UUID? = nil, isPrivate: Bool = false) {
         self.app = app
+        self.spaceID = spaceID
+        self.isPrivateWindow = isPrivate
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1320, height: 860),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -192,8 +228,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func refresh() {
-        let space = store.currentSpace
-        let live = store.selectedTab.flatMap { runtime.tab($0.id) }
+        syncSpace()
+        let space = windowSpace
+        let visible = visibleSpaces
+        let live = space.selected.flatMap { runtime.tab($0) }
         var s = SidebarState()
         s.blockerOn = app.privacy.blockContent
         func row(_ id: TabID) -> SidebarState.Row? {
@@ -209,7 +247,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 loading: w?.isLoading ?? false,
                 playing: t.activity.contains(.playingMedia))
         }
-        s.pages = store.spaces.map { sp in
+        s.pages = visible.map { sp in
             var page = SidebarState.Page(id: sp.id, name: sp.name, theme: sp.resolvedTheme)
             page.favorites = sp.favorites.compactMap(row)
             page.pinned = sp.pinned.compactMap(row)
@@ -217,7 +255,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             page.selected = sp.selected
             return page
         }
-        s.currentIndex = store.spaces.firstIndex { $0.id == space.id } ?? 0
+        s.currentIndex = visible.firstIndex { $0.id == space.id } ?? 0
         s.activeDownloads = DownloadCenter.shared.active.count
         s.nowPlaying = nowPlaying()
 
@@ -234,15 +272,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         s.style = style
 
         if let live {
-            s.host = live.url?.host() ?? store.selectedTab?.url?.host() ?? ""
-            s.isSecure = live.url?.scheme == "https" ? live.isSecure || live.url != nil : (live.url == nil)
+            s.host = live.url?.host() ?? space.selected.flatMap { store.tabs[$0]?.url?.host() } ?? ""
+            // Secure only for a real HTTPS page with no mixed content: the
+            // HTTPS-only interstitial and http pages show the warning shield.
+            s.isSecure = live.url?.scheme == "https" && live.isSecure
             s.canGoBack = live.canGoBack
             s.canGoForward = live.canGoForward
             s.isLoading = live.isLoading
             card.setProgress(live.progress, loading: live.isLoading, hue: space.accentHue)
             if !live.isLoading && live.progress >= 1 { card.dismissSnapshot() }
         }
-        background.set(themes: store.spaces.map(\.resolvedTheme), current: s.currentIndex, keepingAnimation: true)
+        background.set(themes: visible.map(\.resolvedTheme), current: s.currentIndex, keepingAnimation: true)
         topBar.appearance = sidebar.view.appearance
         sidebar.apply(s)
         if tabsOnTop { topBar.apply(s) }
@@ -251,7 +291,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             lastSpaceID = space.id
             warmNeighbourSpaces()
         }
-        window?.title = store.selectedTab?.displayTitle ?? "Aegis"
+        window?.title = space.selected.flatMap { store.tabs[$0]?.displayTitle } ?? (isPrivateWindow ? "Private" : "Aegis")
     }
 
     /// After a space switch settles, quietly wake the neighbouring spaces'
@@ -260,9 +300,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private func warmNeighbourSpaces() {
         warmWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, let i = self.store.spaces.firstIndex(where: { $0.id == self.store.currentSpaceID }) else { return }
-            for n in [i + 1, i - 1] where self.store.spaces.indices.contains(n) {
-                guard let id = self.store.spaces[n].selected, let tab = self.store.tabs[id],
+            guard let self else { return }
+            let visible = self.visibleSpaces
+            guard let i = visible.firstIndex(where: { $0.id == self.spaceID }) else { return }
+            for n in [i + 1, i - 1] where visible.indices.contains(n) {
+                guard let id = visible[n].selected, let tab = self.store.tabs[id],
                       self.runtime.existingTab(id)?.isAwake != true else { continue }
                 _ = tab
                 self.runtime.show(id)
@@ -274,9 +316,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     /// The most relevant background media: playing first, else paused.
     private func nowPlaying() -> NowPlaying? {
-        let selected = store.currentSpace.selected
+        let selected = windowSpace.selected
         var best: (TabID, WebTab)?
-        for space in store.spaces {
+        for space in visibleSpaces {
             for id in space.allTabs where id != selected {
                 guard let t = runtime.tab(id), t.isAwake, t.mediaState != .none else { continue }
                 if t.mediaState == .playing { best = (id, t); break }
@@ -291,7 +333,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func showSelected() {
-        guard let id = store.currentSpace.selected, store.tabs[id] != nil else {
+        guard let id = windowSpace.selected, store.tabs[id] != nil else {
             card.show(nil)
             shownTab = nil
             runtime.foreground = []
@@ -302,7 +344,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let snapshot = wasSleeping ? runtime.tab(id)?.snapshot : nil
         guard let view = runtime.show(id) else { return }
         if shownTab != id || card.current !== view {
-            let spaceChanged = shownTab.map { store.space(containing: $0)?.id != store.currentSpaceID } ?? false
+            let spaceChanged = shownTab.map { store.space(containing: $0)?.id != spaceID } ?? false
             card.show(view, snapshot: snapshot, crossfade: spaceChanged)
             shownTab = id
             runtime.foreground = [id]
@@ -442,10 +484,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func newSpace() {
+        if isPrivateWindow { Toast.show("Spaces aren't available in a private window", in: window); return }
         let hues = [0.48, 0.60, 0.08, 0.92, 0.33, 0.68]
-        sidebar.cacheCurrentSpaceSnapshot()
-        let space = store.addSpace(name: "Space \(store.spaces.count + 1)", accentHue: hues[store.spaces.count % hues.count], newProfile: true)
-        store.currentSpaceID = space.id
+        let count = visibleSpaces.count
+        let space = store.addSpace(name: "Space \(count + 1)", accentHue: hues[count % hues.count], newProfile: true)
+        store.setTheme(SpaceTheme.presets[count % SpaceTheme.presets.count].theme, for: space.id)
+        setWindowSpace(space.id)
         // Ask for a name right away, like Arc; Esc keeps the default.
         DispatchQueue.main.async { [weak self] in
             if !CommandLine.arguments.contains("--snapshot") { self?.renameSpace() }
@@ -453,9 +497,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func switchSpace(_ delta: Int) {
+        let visible = visibleSpaces
+        guard visible.count > 1, let i = visible.firstIndex(where: { $0.id == spaceID }) else { return }
         exitReader()
-        sidebar.cacheCurrentSpaceSnapshot()
-        store.switchSpace(by: delta)
+        setWindowSpace(visible[(i + delta + visible.count) % visible.count].id)
     }
 
     // MARK: Find
@@ -489,7 +534,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         app.extensions.didFocus(window: extensionWindow)
-        if let id = store.currentSpace.selected { runtime.foreground = [id] }
+        // Commands act on the key window's space.
+        if let spaceID, store.spaces.contains(where: { $0.id == spaceID }), store.currentSpaceID != spaceID {
+            store.currentSpaceID = spaceID
+        }
+        if let id = windowSpace.selected { runtime.foreground = [id] }
     }
 }
 
@@ -508,10 +557,10 @@ extension BrowserWindowController: SidebarDelegate {
     }
     func sidebarMove(_ id: TabID, to tier: TabTier, index: Int) { store.move(id, to: tier, at: index) }
     func sidebarSwitchSpace(_ index: Int) {
-        guard store.spaces.indices.contains(index) else { return }
+        let visible = visibleSpaces
+        guard visible.indices.contains(index) else { return }
         exitReader()
-        sidebar.cacheCurrentSpaceSnapshot()
-        store.currentSpaceID = store.spaces[index].id
+        setWindowSpace(visible[index].id)
     }
 
     /// Background media if any, else the current tab.
@@ -579,8 +628,9 @@ extension BrowserWindowController: SidebarDelegate {
         for id in space.allTabs { runtime.discard(id) }
         store.removeSpace(space.id)
         if !sharedProfile {
-            let context = runtime.context(for: profile)
-            Task { await context.clearData() }
+            // Delete means gone: the profile's website data store is removed from disk.
+            let runtime = runtime
+            Task { await runtime.removeProfile(profile.id) }
         }
     }
 
@@ -595,7 +645,8 @@ extension BrowserWindowController: SidebarDelegate {
     func sidebarWillSwipe(toSpace index: Int) {
         // Wake the target space's tab now (off screen), so its page is already
         // painted when the swipe lands instead of loading after.
-        guard store.spaces.indices.contains(index), let id = store.spaces[index].selected else { return }
+        let visible = visibleSpaces
+        guard visible.indices.contains(index), let id = visible[index].selected else { return }
         runtime.show(id)
     }
 

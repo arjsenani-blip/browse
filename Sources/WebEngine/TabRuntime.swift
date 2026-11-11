@@ -43,6 +43,21 @@ public final class TabRuntime {
         return c
     }
 
+    /// Forgets a profile entirely: closes its live tabs, drops its context and
+    /// deletes its website data store from disk (cookies, storage, cache, HSTS).
+    public func removeProfile(_ id: UUID) async {
+        for (tid, t) in tabs where t.context.profile.id == id {
+            _ = await t.sleep()
+            tabs[tid] = nil
+        }
+        let context = contexts.removeValue(forKey: id)
+        ephemeralProfiles.remove(id)
+        if let context, context.dataStore.isPersistent {
+            await context.clearData()
+            try? await WKWebsiteDataStore.remove(forIdentifier: id)
+        }
+    }
+
     public func reloadRules() { contexts.values.forEach { $0.reloadRules() } }
 
     /// The live tab if one exists; never creates one (cheap, for drawing).
@@ -146,6 +161,8 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
         public var finished = false
         public var failed = false
         public var fractionCompleted: Double = 0
+        /// From a private window: listed while open, never written to disk.
+        public var ephemeral: Bool?
         public var isMedia: Bool {
             guard let ext = destination?.pathExtension.lowercased() ?? filename.split(separator: ".").last.map({ String($0).lowercased() }) else { return false }
             return ["png", "jpg", "jpeg", "gif", "webp", "heic", "avif", "svg", "mp4", "mov", "m4v", "webm", "mp3", "m4a", "wav", "aac", "flac"].contains(ext)
@@ -168,10 +185,11 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
 
     public var active: [Item] { items.filter { !$0.finished && !$0.failed } }
 
-    func track(_ download: WKDownload) {
+    func track(_ download: WKDownload, ephemeral: Bool = false) {
         download.delegate = self
         var item = Item(filename: download.originalRequest?.url?.lastPathComponent ?? "download")
         item.sourceURL = download.originalRequest?.url
+        item.ephemeral = ephemeral ? true : nil
         items.insert(item, at: 0)
         map[ObjectIdentifier(download)] = item.id
         let id = item.id
@@ -190,6 +208,12 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
     public func remove(_ id: UUID) {
         items.removeAll { $0.id == id }
         changed()
+    }
+
+    /// Private window closed: drop its downloads from the list.
+    public func forgetEphemeral() {
+        items.removeAll { $0.ephemeral == true }
+        onChange?()
     }
 
     public func clearFinished() {
@@ -232,7 +256,7 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
 
     private func changed() {
         if items.count > 500 { items.removeLast(items.count - 500) }
-        if let data = try? JSONEncoder().encode(items) {
+        if let data = try? JSONEncoder().encode(items.filter { $0.ephemeral != true }) {
             try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: file, options: .atomic)
         }

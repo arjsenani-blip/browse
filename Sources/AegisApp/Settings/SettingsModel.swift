@@ -177,8 +177,8 @@ final class SettingsModel {
             for tab in space.allTabs { services.runtime.discard(tab) }
             store.removeSpace(id)
             if !sharedProfile {
-                let context = services.runtime.context(for: profile)
-                Task { await context.clearData() }
+                let runtime = services.runtime
+                Task { await runtime.removeProfile(profile.id) }
             }
             services.forEachController { $0.refresh() }
         }
