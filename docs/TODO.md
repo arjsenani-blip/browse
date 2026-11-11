@@ -9,9 +9,14 @@ Done:
 - ⌘T palette centered with a faint background blur and a drop shadow.
 - Battery: fixed an idle busy loop (66–90% CPU → ~0–0.5%); change-driven session saves; timer tolerance.
 
-Next: work through docs/qa-round1.md. Start with #2 (private-window isolation: per-window spaceID, hide ephemeral spaces from normal windows, no closed/reopen or download persistence for private, tear down on close), then #6, #7–#15.
-Rigor's QA harness (--qa commands, AEGIS_QA_SUPPORT isolated data dir) is in the scratchpad copy qa-rigor/aegis-qa/Sources/AegisApp/QAHarness.swift. It's worth adopting.
+Done (QA round 1, all 15 agreed items): see docs/qa-round1.md.
 
-Ideas not yet done:
-- Onboarding / first run for Arc users (import, spaces, swipe hint).
-- Split view, link peek.
+Next (below the line from QA):
+- Reader: floating Aa/theme pill, lighter underlines, indicator in the URL pill; strip stray icons.
+- Settings: fill the Search & Tabs void; move passkeys out of a dead tile; Arc import row under Spaces.
+- Fingerprint shim: native-looking toString; noise on export only (pixel readback).
+- Warn before saving a password on http://; failed HTTPS upgrade shouldn't save about:blank.
+- Delight: live favorites (unread badge, hover peek), freeze-space chip showing memory freed, blocked-count on the shield, time-of-day themes.
+- Run a QA round 2 (Rigor + Taste) on the new build.
+
+Dev workflow: `scripts/bundle.sh` builds "Aegis Dev" (bundle ID app.aegis.browser.dev, data in ~/Library/Application Support/Aegis Dev) so harness runs never touch the real session. `scripts/install.sh` builds the real identity and never quits a running Aegis.

@@ -27,7 +27,9 @@ scripts/             bundle.sh (assemble + codesign .app), bench-memory.sh, upda
 
 ## Build & test
 - `swift build` / `swift test` — must stay green.
-- `scripts/bundle.sh [debug|release]` → `build/Aegis.app` (ad-hoc signed). Run with `open build/Aegis.app`.
+- `scripts/bundle.sh [debug|release]` → `build/Aegis.app` as **Aegis Dev** (bundle ID `app.aegis.browser.dev`, data in `~/Library/Application Support/Aegis Dev`): safe to run beside the installed app. Never run harness tests against the real identity.
+- `scripts/install.sh` → real identity into /Applications; never quits a running copy.
+- `--swipe-benchmark` measures drag/release/keyboard paths (frame pacing needs the window visible; otherwise main-thread cost only).
 - `scripts/bench-memory.sh` → idle footprint of the app process after launch + 10 s. **Budget: < 150 MB app process idle** (WebKit child processes reported separately).
 
 ## Rules
