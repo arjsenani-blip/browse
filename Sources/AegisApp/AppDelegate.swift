@@ -126,9 +126,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func toggleReader() { front?.toggleReader() }
     @objc func cycleReaderTheme() { front?.cycleReaderTheme() }
     @objc func reload() { front?.sidebarReload() }
-    @objc func zoomIn() { zoom(by: 1.1) }
-    @objc func zoomOut() { zoom(by: 1 / 1.1) }
-    @objc func zoomReset() { currentWebView?.pageZoom = 1 }
+    @objc func zoomIn() { if front?.readerZoom(2) != true { zoom(by: 1.1) } }
+    @objc func zoomOut() { if front?.readerZoom(-2) != true { zoom(by: 1 / 1.1) } }
+    @objc func zoomReset() { if front?.readerZoom(nil) != true { currentWebView?.pageZoom = 1 } }
     private func zoom(by f: CGFloat) { if let w = currentWebView { w.pageZoom = min(3, max(0.3, w.pageZoom * f)) } }
     private var currentWebView: WKWebViewRef? {
         guard let c = front, let id = c.store.selectedTab?.id else { return nil }

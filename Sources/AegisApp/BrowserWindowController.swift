@@ -471,10 +471,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             }
             // The user may have switched tabs (or closed this one) while extracting.
             guard windowSpace.selected == id, store.tabs[id] != nil else { return }
+            reader.onOpenLink = { [weak self] url in self?.navigate(to: url, newTab: false) }
             reader.show(title: article.title, byline: article.byline, site: article.site, html: article.html)
             readerFor = id
             card.show(reader)
         }
+    }
+
+    /// ⌘+ / ⌘- / ⌘0 size the reader's text while it's showing (the page
+    /// behind it isn't visible). False when the reader isn't up.
+    func readerZoom(_ step: CGFloat?) -> Bool {
+        guard readerFor != nil, readerFor == windowSpace.selected else { return false }
+        if let step { reader.fontSize += step } else { reader.fontSize = 20 }
+        return true
     }
 
     func cycleReaderTheme() {

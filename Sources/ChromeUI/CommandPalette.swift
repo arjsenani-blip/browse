@@ -177,6 +177,24 @@ struct PaletteView: View {
                 .accessibilityElement(children: .combine)
             }
 
+            if model.items.isEmpty, model.commandsOnly, !model.query.isEmpty {
+                // Actions mode never falls back to a web search, so say why
+                // nothing is listed instead of showing a bare field.
+                Divider()
+                HStack(spacing: 8) {
+                    Text("No actions match \u{201C}\(model.query)\u{201D}")
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text("Clear the field, then ⌫ to search tabs and history")
+                        .foregroundStyle(.tertiary)
+                }
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+                .padding(.horizontal, 20)
+                .frame(height: 44)
+                .accessibilityElement(children: .combine)
+            }
+
             if !model.items.isEmpty {
                 Divider()
                 ScrollViewReader { proxy in
