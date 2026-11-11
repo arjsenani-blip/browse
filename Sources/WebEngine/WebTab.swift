@@ -226,6 +226,11 @@ extension WebTab: WKNavigationDelegate {
             return (.cancel, preferences)
         }
         if action.shouldPerformDownload { return (.download, preferences) }
+        // Site quirks: a different user agent for the few sites that need one.
+        if action.targetFrame?.isMainFrame == true {
+            let wanted = SiteQuirks.userAgent(for: action.request.url?.host())
+            if webView.customUserAgent != (wanted ?? "") { webView.customUserAgent = wanted }
+        }
         return (.allow, preferences)
     }
 

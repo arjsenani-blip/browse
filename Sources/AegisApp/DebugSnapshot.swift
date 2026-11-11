@@ -13,6 +13,9 @@ enum DebugSnapshot {
         guard let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count else { return }
         let out = URL(fileURLWithPath: args[i + 1])
         if args.contains("--dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+        if args.contains("--no-fingerprint") { services.privacy.fingerprintProtection = false; services.applyPrivacy() }
+        if args.contains("--no-blocking") { services.privacy.blockContent = false; services.applyPrivacy() }
+        if args.contains("--fingerprint") { services.privacy.fingerprintProtection = true; services.applyPrivacy() }
         if args.contains("--fullscreen") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { services.frontController?.window?.toggleFullScreen(nil) }
         }

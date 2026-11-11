@@ -176,3 +176,55 @@ enum MediaScript {
     })();
     """
 }
+
+/// Without Apple's browser-passkey entitlement, macOS rejects every WebAuthn
+/// request from the app (ASAuthorizationError 1004). Sites like Google then hang
+/// or show a vague error. This page-world shim makes the browser honestly report
+/// "no passkeys", so sites skip straight to password / "Try another way", and
+/// reports explicit (non-conditional) attempts so the app can explain.
+enum PasskeyShim {
+    static let source = """
+    (() => {
+      if (!window.PublicKeyCredential || !navigator.credentials) return;
+      const P = window.PublicKeyCredential;
+      const no = () => Promise.resolve(false);
+      try { P.isUserVerifyingPlatformAuthenticatorAvailable = no; } catch (_) {}
+      try { if (P.isConditionalMediationAvailable) P.isConditionalMediationAvailable = no; } catch (_) {}
+      try {
+        if (P.getClientCapabilities) P.getClientCapabilities = () => Promise.resolve({
+          conditionalCreate: false, conditionalGet: false, hybridTransport: false,
+          passkeyPlatformAuthenticator: false, userVerifyingPlatformAuthenticator: false });
+      } catch (_) {}
+      const tell = (op) => {
+        try { window.webkit.messageHandlers.aegisPasskey.postMessage({ type: 'passkeyBlocked', op, host: location.hostname }); } catch (_) {}
+      };
+      for (const op of ['get', 'create']) {
+        const orig = navigator.credentials[op] && navigator.credentials[op].bind(navigator.credentials);
+        if (!orig) continue;
+        navigator.credentials[op] = function (options) {
+          if (options && options.publicKey) {
+            // Conditional (autofill) requests are silent background probes: just decline.
+            if (options.mediation !== 'conditional') tell(op);
+            return Promise.reject(new DOMException('Passkeys are not available in this browser yet.', 'NotAllowedError'));
+          }
+          return orig(options);
+        };
+      }
+    })();
+    """
+}
+
+/// Per-site fixes for sites that misbehave with Aegis's Safari-style user agent.
+enum SiteQuirks {
+    static let base = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+
+    /// Google Docs/Sheets/Slides see "Version/x Safari" and take a Safari-only
+    /// path that, outside Safari, renders the document canvas at half
+    /// resolution (408 px for 816 pt on a 2x display: blurry text). Without the
+    /// Version token they render at full resolution (verified in a bare WKWebView).
+    static func userAgent(for host: String?) -> String? {
+        guard let host else { return nil }
+        if host == "docs.google.com" { return base + " Safari/605.1.15" }
+        return nil
+    }
+}

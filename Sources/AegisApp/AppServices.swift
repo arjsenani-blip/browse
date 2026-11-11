@@ -50,6 +50,7 @@ final class AppServices {
 
     func start() async {
         runtime.policy = blocking
+        privacy.passkeysAvailable = PasskeyAuthorization.isEntitlementLikelyPresent
         blocking.onRulesChanged = { [weak self] in self?.runtime.reloadRules() }
         await blocking.start()
         do {
@@ -110,6 +111,7 @@ final class AppServices {
     }
     var privateProfiles: Set<UUID> = []
     private var crashTimes: [TabID: [Date]] = [:]
+    private var passkeyHostsExplained: Set<String> = []
 
     func forEachController(_ body: (BrowserWindowController) -> Void) { controllers.forEach(body) }
 
@@ -302,6 +304,21 @@ extension AppServices: WebTabDelegate {
         }
     }
 
+    /// Once per site per launch: say why the passkey prompt didn't appear and
+    /// offer the ways in that do work.
+    private func explainPasskeys(host: String, tab: WebTab) {
+        guard !passkeyHostsExplained.contains(host), let url = tab.url else { return }
+        passkeyHostsExplained.insert(host)
+        CredentialBanner.show(in: frontController?.window, symbol: "person.badge.key",
+                              text: "Passkeys aren't available in Aegis yet — use \u{201C}Try another way\u{201D} to sign in with your password.",
+                              primary: "Open in Safari", secondary: "OK", timeout: 25,
+                              primaryAction: {
+                                  if let safari = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") {
+                                      NSWorkspace.shared.open([url], withApplicationAt: safari, configuration: NSWorkspace.OpenConfiguration())
+                                  }
+                              })
+    }
+
     func webTabDidRequestClose(_ tab: WebTab) {
         frontController?.closeTab(tab.id)
     }
@@ -309,6 +326,7 @@ extension AppServices: WebTabDelegate {
     func webTab(_ tab: WebTab, autofillMessage body: [String: Any]) {
         if CommandLine.arguments.contains("--snapshot") { print("AUTOFILL \(body["type"] ?? "?") host=\(body["host"] ?? "?") tab=\(tab.url?.host() ?? "nil") at \(Date().timeIntervalSince1970)"); fflush(stdout) }
         guard let type = body["type"] as? String, let host = body["host"] as? String else { return }
+        if type == "passkeyBlocked" { explainPasskeys(host: host, tab: tab); return }
         // Only trust messages whose host matches the tab's top-level page.
         guard host == tab.url?.host() else { return }
         switch type {

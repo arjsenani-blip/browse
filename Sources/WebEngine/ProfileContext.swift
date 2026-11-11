@@ -19,6 +19,9 @@ public struct PrivacySettings: Sendable, Equatable {
     public var fingerprintProtection = true
     public var httpsOnly = true
     public var stripTrackingParameters = true
+    /// True only when the app carries Apple's browser-passkey entitlement;
+    /// otherwise pages are told passkeys are unavailable (see PasskeyShim).
+    public var passkeysAvailable = false
     public init() {}
 }
 
@@ -48,6 +51,7 @@ public final class ProfileContext {
         reloadRules()
         userContent.add(ScriptRelay(self), contentWorld: Worlds.autofill, name: "aegisAutofill")
         userContent.add(ScriptRelay(self), contentWorld: Worlds.media, name: "aegisMedia")
+        userContent.add(ScriptRelay(self), contentWorld: .page, name: "aegisPasskey")
     }
 
     func register(_ tab: WebTab, for view: WKWebView) { live[ObjectIdentifier(view)] = WeakTab(tab: tab) }
@@ -89,6 +93,9 @@ public final class ProfileContext {
     }
 
     private func installScripts() {
+        if !settings.passkeysAvailable {
+            userContent.addUserScript(WKUserScript(source: PasskeyShim.source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+        }
         if settings.fingerprintProtection {
             userContent.addUserScript(WKUserScript(source: Farbling.source(seed: sessionSeed), injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
         }
