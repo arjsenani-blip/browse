@@ -782,8 +782,11 @@ extension BrowserWindowController: SidebarDelegate {
             alert.beginSheetModal(for: window) { response in
                 guard response == .alertFirstButtonReturn else { return }
                 MainActor.assumeIsolated {
-                    for t in folder.tabs { self.runtime.discard(t) }
-                    self.store.deleteFolder(id, closeTabs: true)
+                    // closeTab, not a bare discard: keeps back/forward state for
+                    // ⇧⌘T, tells extensions, and clears the reader if it was open.
+                    let tabs = self.store.spaces.first { $0.folders.contains { $0.id == id } }?.folders.first { $0.id == id }?.tabs ?? []
+                    for t in tabs { self.closeTab(t) }
+                    self.store.deleteFolder(id, closeTabs: false)
                 }
             }
         }

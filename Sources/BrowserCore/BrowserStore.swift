@@ -181,6 +181,10 @@ public final class BrowserStore {
     /// Moves a tab into a folder (pinning it if needed).
     public func moveTab(_ tabID: TabID, toFolder folderID: UUID, at index: Int? = nil) {
         guard let space = spaces.first(where: { $0.folders.contains { $0.id == folderID } }) else { return }
+        // A live tab can't change cookie jars: crossing profiles (or into or out
+        // of a private space) must go through a fresh reopen, never a move.
+        if let owner = self.space(containing: tabID), owner.id != space.id,
+           owner.profileID != space.profileID || ephemeralSpaces.contains(owner.id) != ephemeralSpaces.contains(space.id) { return }
         if store_space(containing: tabID) != space.id || tabs[tabID]?.tier != .pinned {
             // Bring it into this space's pinned list first.
             mutateSpace(space.id) { $0.insert(tabID, tier: .pinned) }

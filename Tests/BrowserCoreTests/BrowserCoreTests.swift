@@ -250,4 +250,14 @@ import Testing
         let decoded = try JSONDecoder().decode(SessionSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(decoded.spaces[0].folders.isEmpty)
     }
+
+    @Test func tabsNeverMoveIntoAFolderAcrossProfiles() {
+        let s = BrowserStore()
+        let work = s.addSpace(name: "Work", accentHue: 0.6, newProfile: true)
+        let f = s.newFolder(in: work.id)
+        let personalTab = s.openTab(URL(string: "https://a.com"), in: s.spaces[0].id)   // own profile
+        s.moveTab(personalTab, toFolder: f)
+        #expect(s.space(containing: personalTab)?.id == s.spaces[0].id)
+        #expect(s.spaces.first { $0.id == work.id }?.folders[0].tabs.isEmpty == true)
+    }
 }
