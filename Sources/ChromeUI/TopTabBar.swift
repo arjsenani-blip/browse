@@ -65,7 +65,8 @@ public final class TopTabBar: NSView {
         state = new
         back.isEnabled = new.canGoBack
         forward.isEnabled = new.canGoForward
-        reload.image = NSImage(systemSymbolName: new.isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: nil)
+        reload.image = NSImage(systemSymbolName: new.isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: new.isLoading ? "Stop" : "Reload")
+        reload.toolTip = new.isLoading ? "Stop" : "Reload (⌘R)"
         pill.update(host: new.host, secure: new.isSecure, blocker: new.blockerOn, hue: new.accentHue, style: new.style)
         guard old.favorites != new.favorites || old.pinned != new.pinned || old.today != new.today
                 || old.selected != new.selected || old.accentHue != new.accentHue || strip.arrangedSubviews.isEmpty else { return }

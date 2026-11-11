@@ -98,7 +98,7 @@ public final class TabRuntime {
     }
 
     public func discard(_ id: TabID) {
-        if let t = tabs.removeValue(forKey: id) { Task { await t.sleep() } }
+        tabs.removeValue(forKey: id)?.close()
     }
 
     public func sleep(_ id: TabID) async {

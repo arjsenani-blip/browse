@@ -116,6 +116,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // MARK: Edit / View
     @objc func copyURL() { front?.copyURL() }
     @objc func find() { front?.showFind() }
+    @objc func findNext() { front?.findAgain(backwards: false) }
+    @objc func findPrevious() { front?.findAgain(backwards: true) }
     @objc func commandPalette() { front?.openPalette(.command) }
     @objc func toggleSidebar() { front?.toggleSidebar() }
     @objc func showLibrary() { front?.openLibrary() }

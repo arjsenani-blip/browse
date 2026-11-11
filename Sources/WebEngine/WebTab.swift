@@ -115,6 +115,23 @@ public final class WebTab: NSObject {
         return state
     }
 
+    /// Closing for good: tear down now (no snapshot, no state, no change
+    /// callbacks), so a closed tab's audio stops at once and nothing reports
+    /// on a tab the store and extensions have already forgotten.
+    public func close() {
+        delegate = nil
+        snapshot = nil
+        guard let view = webView else { return }
+        observations.removeAll()
+        context.unregister(view)
+        view.stopLoading()
+        view.pauseAllMediaPlayback(completionHandler: nil)
+        view.navigationDelegate = nil
+        view.uiDelegate = nil
+        view.removeFromSuperview()
+        webView = nil
+    }
+
     public var interactionState: Data? { webView?.interactionState as? Data }
 
     public func load(_ url: URL, typed: Bool = false) {

@@ -544,6 +544,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         bar.focus()
     }
 
+    func findAgain(backwards: Bool) {
+        if let findBar { findBar.findAgain(backwards: backwards) } else { showFind() }
+    }
+
     func closeFind() {
         findBar?.removeFromSuperview()
         findBar = nil

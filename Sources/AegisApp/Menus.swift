@@ -46,6 +46,8 @@ enum Menus {
             .separator(),
             item("Copy Link", #selector(AppDelegate.copyURL), "c", [.command, .shift], target: target),
             item("Find…", #selector(AppDelegate.find), "f", target: target),
+            item("Find Next", #selector(AppDelegate.findNext), "g", target: target),
+            item("Find Previous", #selector(AppDelegate.findPrevious), "g", [.command, .shift], target: target),
         ]))
 
         main.addItem(submenu("View", [

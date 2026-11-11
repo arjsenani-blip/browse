@@ -25,9 +25,9 @@ final class FindBar: NSVisualEffectView, NSSearchFieldDelegate {
         field.action = #selector(search)
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
-        let prev = button("chevron.up", #selector(previous))
-        let next = button("chevron.down", #selector(nextMatch))
-        let close = button("xmark", #selector(closeTapped))
+        let prev = button("chevron.up", "Previous Match", #selector(previous))
+        let next = button("chevron.down", "Next Match", #selector(nextMatch))
+        let close = button("xmark", "Close Find Bar", #selector(closeTapped))
         let stack = NSStackView(views: [field, status, prev, next, close])
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
@@ -46,14 +46,17 @@ final class FindBar: NSVisualEffectView, NSSearchFieldDelegate {
 
     func focus() { window?.makeFirstResponder(field) }
 
-    private func button(_ symbol: String, _ action: Selector) -> NSButton {
-        let b = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!, target: self, action: action)
+    private func button(_ symbol: String, _ label: String, _ action: Selector) -> NSButton {
+        let b = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label) ?? NSImage(), target: self, action: action)
+        b.toolTip = label
         b.isBordered = false
         b.contentTintColor = .secondaryLabelColor
         return b
     }
 
     @objc private func search() { find(backwards: false) }
+    /// Edit > Find Next / Find Previous (⌘G / ⇧⌘G).
+    func findAgain(backwards: Bool) { find(backwards: backwards) }
     @objc private func previous() { find(backwards: true) }
     @objc private func nextMatch() { find(backwards: false) }
     @objc private func closeTapped() { onClose?() }
@@ -82,8 +85,12 @@ final class FindBar: NSVisualEffectView, NSSearchFieldDelegate {
 /// A transient confirmation pill at the bottom of the window.
 @MainActor
 enum Toast {
+    private static weak var current: NSView?
+
     static func show(_ text: String, in window: NSWindow?) {
         guard let content = window?.contentView else { return }
+        // One at a time: a second toast used to land on top of the first.
+        current?.removeFromSuperview()
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 12, weight: .medium)
         let pill = NSVisualEffectView()
@@ -95,6 +102,7 @@ enum Toast {
         pill.addSubview(label)
         pill.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(pill)
+        current = pill
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 14),
             label.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -14),
