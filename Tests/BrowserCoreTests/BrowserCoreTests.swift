@@ -183,3 +183,52 @@ import Testing
         #expect(s.closed.isEmpty)
     }
 }
+
+@Suite @MainActor struct FolderTests {
+    @Test func createMoveAndOrder() {
+        let s = BrowserStore()
+        let sid = s.currentSpaceID
+        let a = s.openTab(URL(string: "https://a.com")); s.move(a, to: .pinned)
+        let b = s.openTab(URL(string: "https://b.com"))          // today
+        let f = s.newFolder(in: sid)
+        #expect(s.currentSpace.pinnedEntries.first == .folder(s.currentSpace.folders[0]))  // new folders go on top
+        s.moveTab(b, toFolder: f)
+        #expect(s.tabs[b]?.tier == .pinned)
+        #expect(s.currentSpace.folders[0].tabs == [b])
+        #expect(!s.currentSpace.today.contains(b))
+        // Loose pinned tab still listed after the folder; folder tab not listed loose.
+        #expect(s.currentSpace.pinnedEntries.count == 2)
+        s.removeFromFolder(b)
+        #expect(s.currentSpace.folders[0].tabs.isEmpty)
+        #expect(s.currentSpace.pinned.contains(b))
+    }
+
+    @Test func deleteKeepsOrClosesTabs() {
+        let s = BrowserStore()
+        let sid = s.currentSpaceID
+        let f1 = s.newFolder(in: sid), f2 = s.newFolder(in: sid)
+        let a = s.openTab(URL(string: "https://a.com")), b = s.openTab(URL(string: "https://b.com"))
+        s.moveTab(a, toFolder: f1); s.moveTab(b, toFolder: f2)
+        s.deleteFolder(f1, closeTabs: false)
+        #expect(s.tabs[a] != nil && s.currentSpace.pinned.contains(a))
+        #expect(s.deleteFolder(f2, closeTabs: true) == [b])
+        #expect(s.tabs[b] == nil)
+        #expect(s.currentSpace.folders.isEmpty)
+    }
+
+    @Test func unpinningLeavesFolderAndOldSessionsDecode() throws {
+        let s = BrowserStore()
+        let f = s.newFolder(in: s.currentSpaceID)
+        let a = s.openTab(URL(string: "https://a.com"))
+        s.moveTab(a, toFolder: f)
+        s.move(a, to: .today)
+        #expect(s.currentSpace.folders[0].tabs.isEmpty)
+        // A session saved before folders existed has no "folderList" key.
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(s.snapshot())) as! [String: Any]
+        var spaces = json["spaces"] as! [[String: Any]]
+        spaces[0].removeValue(forKey: "folderList")
+        json["spaces"] = spaces
+        let decoded = try JSONDecoder().decode(SessionSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded.spaces[0].folders.isEmpty)
+    }
+}

@@ -252,6 +252,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             page.icon = sp.icon ?? (isPrivateWindow ? "eye.slash" : Space.icons[(visible.firstIndex { $0.id == sp.id } ?? 0) % Space.icons.count])
             page.favorites = sp.favorites.compactMap(row)
             page.pinned = sp.pinned.compactMap(row)
+            page.pinnedEntries = sp.pinnedEntries.compactMap { entry -> PinnedItem? in
+                switch entry {
+                case .tab(let id): return row(id).map { .tab($0) }
+                case .folder(let f): return .folder(FolderRow(id: f.id, name: f.name, icon: f.icon, expanded: f.isExpanded, children: f.tabs.compactMap(row)))
+                }
+            }
             page.today = sp.today.compactMap(row)
             page.selected = sp.selected
             return page
@@ -669,7 +675,7 @@ extension BrowserWindowController: SidebarDelegate {
         }
         menu.autoenablesItems = false
         add("New Tab", "plus.square", "t") { [weak self] in self?.openPalette(.newTab) }
-        add("New Folder", "folder.badge.plus", enabled: newFolderAvailable) { [weak self] in self?.newFolder() }
+        add("New Folder", "folder.badge.plus", "n", [.command, .option, .shift], enabled: newFolderAvailable && !isPrivateWindow) { [weak self] in self?.newFolder() }
         menu.addItem(.separator())
         add("New Space", "square.stack.3d.up", "n", [.command, .option], enabled: !isPrivateWindow) { [weak self] in self?.newSpace() }
         add("New Private Window", "eye.slash", "n", [.command, .shift]) { (NSApp.delegate as? AppDelegate)?.newPrivateWindow() }
@@ -678,9 +684,91 @@ extension BrowserWindowController: SidebarDelegate {
         return menu
     }
 
-    /// Folders arrive with the folder model; until then the menu item is disabled.
-    var newFolderAvailable: Bool { false }
-    func newFolder() {}
+    var newFolderAvailable: Bool { true }
+
+    /// New "Untitled" folder at the top of Pinned, name ready to type (Arc).
+    func newFolder() {
+        let id = store.newFolder(in: windowSpace.id)
+        refresh()
+        sidebar.beginRenamingFolder(id)
+    }
+
+    func sidebarToggleFolder(_ id: UUID) {
+        store.updateFolder(id) { $0.isExpanded.toggle() }
+    }
+
+    func sidebarMoveTab(_ tab: TabID, toFolder folder: UUID, index: Int?) {
+        store.moveTab(tab, toFolder: folder, at: index)
+    }
+
+    func sidebarRenameFolder(_ id: UUID, to name: String) {
+        store.updateFolder(id) { $0.name = name }
+    }
+
+    func sidebarFolderMenu(_ id: UUID) -> NSMenu? {
+        guard let folder = windowSpace.folders.first(where: { $0.id == id }) else { return nil }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func add(_ title: String, _ symbol: String? = nil, enabled: Bool = true, _ action: @escaping () -> Void) {
+            let item = ClosureMenuItem(title: title, action: action)
+            if let symbol { item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
+            item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        add("Rename", "pencil") { [weak self] in self?.sidebar.beginRenamingFolder(id) }
+        let icons = NSMenuItem(title: "Change Icon", action: nil, keyEquivalent: "")
+        icons.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: nil)
+        let iconMenu = NSMenu()
+        for symbol in ["folder", "star", "bolt", "book.closed", "briefcase", "cart", "flag", "lightbulb", "calendar", "cpu", "gamecontroller", "music.note"] {
+            let item = ClosureMenuItem(title: symbol.replacingOccurrences(of: ".", with: " ").capitalized) { [weak self] in
+                self?.store.updateFolder(id) { $0.icon = symbol == "folder" ? nil : symbol }
+            }
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            item.state = (folder.icon ?? "folder") == symbol ? .on : .off
+            iconMenu.addItem(item)
+        }
+        icons.submenu = iconMenu
+        menu.addItem(icons)
+        menu.addItem(.separator())
+        add("New Tab in Folder", "plus") { [weak self] in
+            guard let self else { return }
+            let tab = self.store.openTab(nil, select: true, in: self.windowSpace.id)
+            self.store.moveTab(tab, toFolder: id)
+            self.openPalette(.navigate)
+        }
+        add("Open All", "arrow.up.forward.app", enabled: !folder.tabs.isEmpty) { [weak self] in
+            for t in folder.tabs { self?.runtime.show(t) }
+        }
+        add("Put All to Sleep", "moon.zzz", enabled: !folder.tabs.isEmpty) { [weak self] in
+            Task { for t in folder.tabs { await self?.runtime.sleep(t) } }
+        }
+        add("Copy All Links", "link", enabled: !folder.tabs.isEmpty) { [weak self] in
+            guard let self else { return }
+            let links = folder.tabs.compactMap { self.store.tabs[$0]?.url?.absoluteString }.joined(separator: "\n")
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(links, forType: .string)
+            Toast.show("Copied \(folder.tabs.count) link\(folder.tabs.count == 1 ? "" : "s")", in: self.window)
+        }
+        menu.addItem(.separator())
+        add("Delete Folder (Keep Tabs)", "folder.badge.minus") { [weak self] in self?.store.deleteFolder(id, closeTabs: false) }
+        add("Delete Folder and Close Tabs…", "trash", enabled: !folder.tabs.isEmpty) { [weak self] in
+            guard let self else { return }
+            let alert = NSAlert()
+            alert.messageText = "Delete “\(folder.name)” and close its \(folder.tabs.count) tab\(folder.tabs.count == 1 ? "" : "s")?"
+            alert.addButton(withTitle: "Delete")
+            alert.addButton(withTitle: "Cancel")
+            alert.buttons.first?.hasDestructiveAction = true
+            guard let window = self.window else { return }
+            alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn else { return }
+                MainActor.assumeIsolated {
+                    for t in folder.tabs { self.runtime.discard(t) }
+                    self.store.deleteFolder(id, closeTabs: true)
+                }
+            }
+        }
+        return menu
+    }
 
     func sidebarClearToday() {
         let space = windowSpace
@@ -732,6 +820,26 @@ extension BrowserWindowController: SidebarDelegate {
             NSPasteboard.general.setString(url.absoluteString, forType: .string)
         }
         item("Put Tab to Sleep") { [weak self] in Task { await self?.runtime.sleep(id) } }
+        let space = store.space(containing: id)
+        if let current = space?.folder(containing: id) {
+            item("Remove from “\(current.name)”") { [weak self] in self?.store.removeFromFolder(id) }
+        }
+        let otherFolders = (space?.folders ?? []).filter { !$0.tabs.contains(id) }
+        let folderItem = NSMenuItem(title: "Move to Folder", action: nil, keyEquivalent: "")
+        let folderMenu = NSMenu()
+        for f in otherFolders {
+            folderMenu.addItem(ClosureMenuItem(title: f.name) { [weak self] in self?.store.moveTab(id, toFolder: f.id) })
+        }
+        if !otherFolders.isEmpty { folderMenu.addItem(.separator()) }
+        folderMenu.addItem(ClosureMenuItem(title: "New Folder…") { [weak self] in
+            guard let self, let sid = space?.id else { return }
+            let f = self.store.newFolder(in: sid)
+            self.store.moveTab(id, toFolder: f)
+            self.refresh()
+            self.sidebar.beginRenamingFolder(f)
+        })
+        folderItem.submenu = folderMenu
+        menu.addItem(folderItem)
         if store.spaces.count > 1 {
             let move = NSMenuItem(title: "Move to Space", action: nil, keyEquivalent: "")
             let sub = NSMenu()

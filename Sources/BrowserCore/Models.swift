@@ -97,6 +97,15 @@ public struct Space: Codable, Sendable, Identifiable, Equatable {
     public var resolvedTheme: SpaceTheme { theme ?? .from(hue: accentHue) }
     /// SF Symbol for the space's chip; nil picks one from `Space.icons` by position.
     public var icon: String?
+    /// Arc-style folders inside Pinned. Optional so older sessions still decode.
+    public var folderList: [Folder]?
+    public var folders: [Folder] {
+        get { folderList ?? [] }
+        set { folderList = newValue.isEmpty ? nil : newValue }
+    }
+
+    /// The folder holding a pinned tab, if any.
+    public func folder(containing id: TabID) -> Folder? { folders.first { $0.tabs.contains(id) } }
     public static let icons = ["house", "briefcase", "flask", "book.closed", "paintpalette", "gamecontroller",
                                "music.note", "airplane", "leaf", "graduationcap", "cart", "heart"]
 
@@ -128,6 +137,9 @@ public struct Space: Codable, Sendable, Identifiable, Equatable {
         favorites.removeAll { $0 == id }
         pinned.removeAll { $0 == id }
         today.removeAll { $0 == id }
+        if folders.contains(where: { $0.tabs.contains(id) }) {
+            folders = folders.map { var f = $0; f.tabs.removeAll { $0 == id }; return f }
+        }
     }
 
     public mutating func insert(_ id: TabID, tier: TabTier, at index: Int? = nil) {
@@ -153,5 +165,40 @@ public struct ArchivedTab: Codable, Sendable, Identifiable, Equatable {
         self.title = title
         self.spaceID = spaceID
         self.archived = archived
+    }
+}
+
+/// A folder in a space's Pinned section (one level, like most Arc use). Its
+/// tabs are pinned tabs; `position` is where the folder sits among the
+/// top-level pinned items (loose tabs and folders).
+public struct Folder: Codable, Sendable, Identifiable, Equatable {
+    public var id: UUID
+    public var name: String
+    /// SF Symbol; nil shows the folder glyph.
+    public var icon: String?
+    public var isExpanded: Bool
+    public var tabs: [TabID]
+    public var position: Int
+
+    public init(id: UUID = UUID(), name: String = "Untitled", icon: String? = nil, isExpanded: Bool = true, tabs: [TabID] = [], position: Int = 0) {
+        self.id = id; self.name = name; self.icon = icon; self.isExpanded = isExpanded; self.tabs = tabs; self.position = position
+    }
+}
+
+/// A top-level entry in Pinned, in display order.
+public enum PinnedEntry: Equatable, Sendable {
+    case tab(TabID)
+    case folder(Folder)
+}
+
+public extension Space {
+    /// Loose pinned tabs and folders interleaved by folder position.
+    var pinnedEntries: [PinnedEntry] {
+        let inFolders = Set(folders.flatMap(\.tabs))
+        var entries: [PinnedEntry] = pinned.filter { !inFolders.contains($0) }.map { .tab($0) }
+        for f in folders.sorted(by: { $0.position < $1.position }) {
+            entries.insert(.folder(f), at: min(max(0, f.position), entries.count))
+        }
+        return entries
     }
 }

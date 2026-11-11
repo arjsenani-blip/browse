@@ -145,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func hibernateBackground() { front?.hibernateCurrentSpaceBackground() }
     @objc func selectTabNumber(_ sender: NSMenuItem) { front?.selectTab(at: sender.tag) }
     @objc func newSpace() { front?.newSpace() }
+    @objc func newFolder() { front?.newFolder() }
     @objc func nextSpace() { front?.switchSpace(1) }
     @objc func previousSpace() { front?.switchSpace(-1) }
 

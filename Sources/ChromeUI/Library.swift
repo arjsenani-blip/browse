@@ -217,7 +217,9 @@ public final class LibraryController {
         p.behavior = .transient
         p.animates = !Tokens.Motion.reduceMotion
         p.contentViewController = NSHostingController(rootView: LibraryView(model: model))
-        p.show(relativeTo: view.bounds, of: view, preferredEdge: .maxX)
+        // The button sits at the bottom of the sidebar: open upward so the
+        // popover never runs off the bottom of the screen.
+        p.show(relativeTo: view.bounds, of: view, preferredEdge: view.isFlipped ? .minY : .maxY)
         popover = p
     }
 }

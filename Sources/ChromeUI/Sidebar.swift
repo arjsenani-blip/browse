@@ -21,6 +21,8 @@ public struct SidebarState: Equatable {
         public var name: String
         public var theme: SpaceTheme
         public var icon: String = "house"
+        /// Pinned section in display order: loose tabs and folders.
+        public var pinnedEntries: [PinnedItem] = []
         public var favorites: [Row] = []
         public var pinned: [Row] = []
         public var today: [Row] = []
@@ -49,6 +51,22 @@ public struct SidebarState: Equatable {
     public var selected: TabID? { current?.selected }
     public var spaceName: String { current?.name ?? "" }
     public var accentHue: Double { current.map { $0.theme.top.mixed(with: $0.theme.bottom, 0.5).hue } ?? 0.48 }
+}
+
+public struct FolderRow: Equatable {
+    public var id: UUID
+    public var name: String
+    public var icon: String?
+    public var expanded: Bool
+    public var children: [SidebarState.Row]
+    public init(id: UUID, name: String, icon: String?, expanded: Bool, children: [SidebarState.Row]) {
+        self.id = id; self.name = name; self.icon = icon; self.expanded = expanded; self.children = children
+    }
+}
+
+public enum PinnedItem: Equatable {
+    case tab(SidebarState.Row)
+    case folder(FolderRow)
 }
 
 /// How the sidebar should read over the current background.
@@ -112,6 +130,10 @@ public protocol SidebarDelegate: AnyObject {
     func sidebarClearToday()
     /// Items for the footer "+" menu (New Tab, New Folder, New Space…).
     func sidebarNewMenu() -> NSMenu?
+    func sidebarToggleFolder(_ id: UUID)
+    func sidebarFolderMenu(_ id: UUID) -> NSMenu?
+    func sidebarMoveTab(_ tab: TabID, toFolder folder: UUID, index: Int?)
+    func sidebarRenameFolder(_ id: UUID, to name: String)
     /// Live position between two spaces (0 = `from`, 1 = `to`) for the background cross-fade;
     /// a negative fraction means "animate from `from` to `to`" (keyboard or dot switch).
     func sidebarSwipeProgress(from: Int, to: Int, fraction: Double)
@@ -299,6 +321,15 @@ public final class SidebarViewController: NSViewController {
             }
         }
         committedBySwipe = false
+    }
+
+    /// Starts inline renaming of a folder on the current page (new folders).
+    public func beginRenamingFolder(_ id: UUID) {
+        guard pages.indices.contains(displayedIndex) else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.pages[self.displayedIndex].beginRenaming(id)
+        }
     }
 
     /// Extension toolbar buttons, shown inside the address pill.
@@ -620,8 +651,22 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     enum Item: Equatable {
         case tab(SidebarState.Row, TabTier)
+        case folder(FolderRow)
+        /// A tab inside a folder (indented).
+        case child(SidebarState.Row, folder: UUID)
         case divider
         case newTab
+
+        /// Identity for animated diffs (content changes don't count).
+        var key: String {
+            switch self {
+            case .tab(let r, _): "t" + r.id.description
+            case .folder(let f): "f" + f.id.uuidString
+            case .child(let r, _): "c" + r.id.description
+            case .divider: "divider"
+            case .newTab: "new"
+            }
+        }
     }
 
     init() {
@@ -642,8 +687,12 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.registerForDraggedTypes([.aegisTab])
         table.setDraggingSourceOperationMask(.move, forLocal: true)
         table.menuProvider = { [weak self] row in
-            guard let self, row >= 0, row < self.rows.count, case .tab(let r, _) = self.rows[row] else { return nil }
-            return self.delegate?.sidebarContextMenu(for: r.id)
+            guard let self, row >= 0, row < self.rows.count else { return nil }
+            switch self.rows[row] {
+            case .tab(let r, _), .child(let r, _): return self.delegate?.sidebarContextMenu(for: r.id)
+            case .folder(let f): return self.delegate?.sidebarFolderMenu(f.id)
+            default: return nil
+            }
         }
         scroll.documentView = table
         scroll.drawsBackground = false
@@ -699,22 +748,57 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             let rows = CGFloat((favs.count + 3) / 4)
             gridHeight.constant = favs.isEmpty ? 0 : rows * Tokens.Size.favoriteTile + (rows - 1) * 8 + Tokens.Space.sectionGap
         }
-        var items: [Item] = new.pinned.map { .tab($0, .pinned) }
+        var items: [Item] = []
+        let pinnedEntries = new.pinnedEntries.isEmpty && !new.pinned.isEmpty ? new.pinned.map { PinnedItem.tab($0) } : new.pinnedEntries
+        for entry in pinnedEntries {
+            switch entry {
+            case .tab(let r): items.append(.tab(r, .pinned))
+            case .folder(let f):
+                items.append(.folder(f))
+                // Collapsed folders still show their selected tab (Arc).
+                let visible = f.expanded ? f.children : f.children.filter { $0.id == new.selected }
+                items += visible.map { .child($0, folder: f.id) }
+            }
+        }
         items.append(.divider)
         items.append(.newTab)
         items += new.today.map { .tab($0, .today) }
         guard items != rows || old.selected != new.selected || oldStyle != newStyle else { return }
-        let sameShape = items.count == rows.count && zip(items, rows).allSatisfy { a, b in
-            if case .tab(let x, _) = a, case .tab(let y, _) = b { return x.id == y.id }
-            return a == b
-        }
+        let oldRows = rows
         rows = items
         table.rowHeight = newStyle.rowHeight
-        if sameShape && oldStyle == newStyle {
+        let oldKeys = oldRows.map(\.key), newKeys = items.map(\.key)
+        if oldKeys == newKeys, oldStyle == newStyle {
             table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<rows.count), columnIndexes: [0])
+            return
+        }
+        // One contiguous insertion or removal (folder expand/collapse, a tab
+        // opened or closed): animate just those rows instead of reloading.
+        var prefix = 0
+        while prefix < min(oldKeys.count, newKeys.count), oldKeys[prefix] == newKeys[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(oldKeys.count, newKeys.count) - prefix,
+              oldKeys[oldKeys.count - 1 - suffix] == newKeys[newKeys.count - 1 - suffix] { suffix += 1 }
+        let removed = prefix..<(oldKeys.count - suffix), inserted = prefix..<(newKeys.count - suffix)
+        if oldStyle == newStyle, window != nil, (removed.isEmpty || inserted.isEmpty), removed.count + inserted.count <= 40 {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = Tokens.Motion.duration(0.22)
+                table.beginUpdates()
+                if !removed.isEmpty { table.removeRows(at: IndexSet(integersIn: removed), withAnimation: [.slideUp, .effectFade]) }
+                if !inserted.isEmpty { table.insertRows(at: IndexSet(integersIn: inserted), withAnimation: [.slideDown, .effectFade]) }
+                table.endUpdates()
+            }
+            let unchanged = IndexSet(integersIn: 0..<rows.count).subtracting(IndexSet(integersIn: inserted))
+            table.reloadData(forRowIndexes: unchanged, columnIndexes: [0])
         } else {
             table.reloadData()
         }
+    }
+
+    func beginRenaming(_ folder: UUID) {
+        guard let row = rows.firstIndex(where: { if case .folder(let f) = $0 { return f.id == folder }; return false }) else { return }
+        table.scrollRowToVisible(row)
+        (table.view(atColumn: 0, row: row, makeIfNecessary: true) as? FolderCell)?.beginEditing()
     }
 
     // Swipes that start over the empty part of a page.
@@ -727,7 +811,8 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let row = table.clickedRow
         guard row >= 0, row < rows.count else { return }
         switch rows[row] {
-        case .tab(let r, _): delegate?.sidebarSelect(r.id)
+        case .tab(let r, _), .child(let r, _): delegate?.sidebarSelect(r.id)
+        case .folder(let f): delegate?.sidebarToggleFolder(f.id)
         case .newTab: delegate?.sidebarNewTab()
         case .divider: break
         }
@@ -757,13 +842,27 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             v.configure(r, selected: r.id == page.selected, style: style)
             v.onClose = { [weak self] in self?.delegate?.sidebarClose(r.id) }
             return v
+        case .child(let r, _):
+            let v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
+            v.configure(r, selected: r.id == page.selected, style: style, indent: 14)
+            v.onClose = { [weak self] in self?.delegate?.sidebarClose(r.id) }
+            return v
+        case .folder(let f):
+            let v = tableView.makeView(withIdentifier: FolderCell.id, owner: nil) as? FolderCell ?? FolderCell()
+            v.configure(f, style: style)
+            v.onRename = { [weak self] name in self?.delegate?.sidebarRenameFolder(f.id, to: name) }
+            return v
         }
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        guard case .tab(let r, _) = rows[row] else { return nil }
+        let r: SidebarState.Row
+        switch rows[row] {
+        case .tab(let x, _), .child(let x, _): r = x
+        default: return nil
+        }
         let item = NSPasteboardItem()
         item.setString(r.id.description, forType: .aegisTab)
         if let url = r.url { item.setString(url.absoluteString, forType: .string) }
@@ -771,13 +870,26 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int, proposedDropOperation op: NSTableView.DropOperation) -> NSDragOperation {
+        guard info.draggingPasteboard.string(forType: .aegisTab) != nil else { return [] }
+        // Onto a folder row: into the folder (the whole row highlights).
+        if op == .on, rows.indices.contains(row), case .folder = rows[row] { return .move }
         tableView.setDropRow(row, dropOperation: .above)
-        return info.draggingPasteboard.string(forType: .aegisTab) == nil ? [] : .move
+        return .move
     }
 
     func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
         guard let raw = info.draggingPasteboard.string(forType: .aegisTab), let uuid = UUID(uuidString: raw) else { return false }
         let id = TabID(uuid)
+        if dropOperation == .on, rows.indices.contains(row), case .folder(let f) = rows[row] {
+            delegate?.sidebarMoveTab(id, toFolder: f.id, index: nil)
+            return true
+        }
+        // Between a folder's children: into that folder at that spot.
+        if rows.indices.contains(row), case .child(_, let folder) = rows[row] {
+            let firstChild = rows.firstIndex { if case .child(_, let f) = $0 { return f == folder }; return false } ?? row
+            delegate?.sidebarMoveTab(id, toFolder: folder, index: row - firstChild)
+            return true
+        }
         // Rows above the divider are pinned; below "New Tab" are today's.
         let dividerRow = rows.firstIndex(of: .divider) ?? 0
         if row <= dividerRow {
@@ -845,7 +957,6 @@ final class TabCell: NSTableCellView {
             background.trailingAnchor.constraint(equalTo: trailingAnchor),
             background.topAnchor.constraint(equalTo: topAnchor),
             background.bottomAnchor.constraint(equalTo: bottomAnchor),
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: Tokens.Size.favicon),
             icon.heightAnchor.constraint(equalToConstant: Tokens.Size.favicon),
@@ -859,11 +970,16 @@ final class TabCell: NSTableCellView {
             closeButton.widthAnchor.constraint(equalToConstant: 18),
         ])
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        iconLeading = icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
+        iconLeading?.isActive = true
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ row: SidebarState.Row, selected: Bool, style: SidebarStyle) {
+    private var iconLeading: NSLayoutConstraint?
+
+    func configure(_ row: SidebarState.Row, selected: Bool, style: SidebarStyle, indent: CGFloat = 0) {
+        iconLeading?.constant = 10 + indent
         self.selected = selected
         self.style = style
         label.stringValue = row.title
@@ -900,6 +1016,7 @@ final class TabCell: NSTableCellView {
     }
 
     func configureNewTab(style: SidebarStyle) {
+        iconLeading?.constant = 10
         selected = false
         self.style = style
         label.stringValue = "New Tab"
@@ -935,6 +1052,70 @@ final class TabCell: NSTableCellView {
     }
     override func otherMouseUp(with event: NSEvent) { if event.buttonNumber == 2 { onClose?() } }
     @objc private func closeClicked() { onClose?() }
+}
+
+/// A folder row: folder glyph (filled when open) and its name, editable in place.
+final class FolderCell: NSTableCellView, NSTextFieldDelegate {
+    static let id = NSUserInterfaceItemIdentifier("FolderCell")
+    private let glyph = NSImageView()
+    private let name = NSTextField(string: "")
+    private let count = NSTextField(labelWithString: "")
+    var onRename: ((String) -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        identifier = FolderCell.id
+        glyph.symbolConfiguration = .init(pointSize: 13, weight: .medium)
+        glyph.contentTintColor = Tokens.secondaryInk
+        name.isBordered = false
+        name.drawsBackground = false
+        name.isEditable = false
+        name.isSelectable = false
+        name.focusRingType = .none
+        name.lineBreakMode = .byTruncatingTail
+        name.delegate = self
+        name.cell?.usesSingleLineMode = true
+        count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        count.textColor = Tokens.tertiaryInk
+        for v in [glyph, name, count] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        NSLayoutConstraint.activate([
+            glyph.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
+            glyph.widthAnchor.constraint(equalToConstant: Tokens.Size.favicon),
+            name.leadingAnchor.constraint(equalTo: glyph.trailingAnchor, constant: 10),
+            name.centerYAnchor.constraint(equalTo: centerYAnchor),
+            count.leadingAnchor.constraint(greaterThanOrEqualTo: name.trailingAnchor, constant: 6),
+            count.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            count.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ f: FolderRow, style: SidebarStyle) {
+        name.stringValue = f.name
+        name.font = .systemFont(ofSize: style.fontSize, weight: .medium)
+        name.textColor = .labelColor
+        glyph.image = NSImage(systemSymbolName: f.icon ?? (f.expanded ? "folder.fill" : "folder"), accessibilityDescription: nil)
+        // When collapsed, how many tabs it holds; when open the children speak for themselves.
+        count.stringValue = f.expanded || f.children.isEmpty ? "" : "\(f.children.count)"
+        toolTip = f.expanded ? "Click to collapse" : "Click to expand"
+        setAccessibilityLabel("\(f.name) folder, \(f.children.count) tabs, \(f.expanded ? "expanded" : "collapsed")")
+    }
+
+    func beginEditing() {
+        name.isEditable = true
+        name.isSelectable = true
+        window?.makeFirstResponder(name)
+        name.currentEditor()?.selectAll(nil)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        name.isEditable = false
+        name.isSelectable = false
+        let text = name.stringValue.trimmingCharacters(in: .whitespaces)
+        onRename?(text.isEmpty ? "Untitled" : text)
+    }
 }
 
 final class DividerCell: NSTableCellView {

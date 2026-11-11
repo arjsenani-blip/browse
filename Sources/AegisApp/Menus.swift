@@ -72,7 +72,7 @@ enum Menus {
             item("Previous Tab", #selector(AppDelegate.previousTab), "\t", [.control, .shift], target: target),
             item("Pin / Unpin Tab", #selector(AppDelegate.togglePin), "p", [.command, .shift], target: target),
             item("Add to Favorites", #selector(AppDelegate.toggleFavorite), "d", target: target),
-            item("Put Background Tabs to Sleep", #selector(AppDelegate.hibernateBackground), "h", [.command, .option], target: target),
+            item("Put Background Tabs to Sleep", #selector(AppDelegate.hibernateBackground), "h", [.command, .option, .control], target: target),
             .separator(),
         ]
         for n in 1...9 {
@@ -84,6 +84,7 @@ enum Menus {
 
         main.addItem(submenu("Spaces", [
             item("New Space", #selector(AppDelegate.newSpace), "n", [.command, .option], target: target),
+            item("New Folder", #selector(AppDelegate.newFolder), "n", [.command, .option, .shift], target: target),
             item("Next Space", #selector(AppDelegate.nextSpace), "]", [.command, .option], target: target),
             item("Previous Space", #selector(AppDelegate.previousSpace), "[", [.command, .option], target: target),
         ]))

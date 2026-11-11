@@ -149,6 +149,69 @@ public final class BrowserStore {
         return removed
     }
 
+    // MARK: Folders
+
+    /// Creates an empty folder at the top of Pinned and returns its id.
+    @discardableResult
+    public func newFolder(in spaceID: UUID, name: String = "Untitled") -> UUID {
+        let folder = Folder(name: name, position: 0)
+        mutateSpace(spaceID) { space in
+            space.folders = space.folders.map { var f = $0; f.position += 1; return f } + [folder]
+        }
+        return folder.id
+    }
+
+    public func updateFolder(_ id: UUID, _ change: (inout Folder) -> Void) {
+        guard let si = spaces.firstIndex(where: { $0.folders.contains { $0.id == id } }),
+              let fi = spaces[si].folders.firstIndex(where: { $0.id == id }) else { return }
+        var f = spaces[si].folders[fi]
+        change(&f)
+        spaces[si].folders[fi] = f
+    }
+
+    /// Moves a tab into a folder (pinning it if needed).
+    public func moveTab(_ tabID: TabID, toFolder folderID: UUID, at index: Int? = nil) {
+        guard let space = spaces.first(where: { $0.folders.contains { $0.id == folderID } }) else { return }
+        if store_space(containing: tabID) != space.id || tabs[tabID]?.tier != .pinned {
+            // Bring it into this space's pinned list first.
+            mutateSpace(space.id) { $0.insert(tabID, tier: .pinned) }
+            if let owner = spaces.first(where: { $0.id != space.id && $0.allTabs.contains(tabID) }) {
+                mutateSpace(owner.id) { $0.remove(tabID) }
+            }
+            tabs[tabID]?.tier = .pinned
+        }
+        mutateSpace(space.id) { sp in
+            sp.folders = sp.folders.map { var f = $0; f.tabs.removeAll { $0 == tabID }; return f }
+            if !sp.pinned.contains(tabID) { sp.pinned.append(tabID) }
+            if let fi = sp.folders.firstIndex(where: { $0.id == folderID }) {
+                let i = min(index ?? sp.folders[fi].tabs.count, sp.folders[fi].tabs.count)
+                sp.folders[fi].tabs.insert(tabID, at: i)
+                sp.folders[fi].isExpanded = true
+            }
+        }
+    }
+
+    /// Takes a tab out of its folder; it stays a loose pinned tab.
+    public func removeFromFolder(_ tabID: TabID) {
+        guard let space = space(containing: tabID) else { return }
+        mutateSpace(space.id) { sp in sp.folders = sp.folders.map { var f = $0; f.tabs.removeAll { $0 == tabID }; return f } }
+    }
+
+    /// Deletes a folder. `closeTabs: false` keeps its tabs as loose pinned tabs.
+    @discardableResult
+    public func deleteFolder(_ id: UUID, closeTabs: Bool) -> [TabID] {
+        guard let space = spaces.first(where: { $0.folders.contains { $0.id == id } }),
+              let folder = space.folders.first(where: { $0.id == id }) else { return [] }
+        mutateSpace(space.id) { sp in
+            sp.folders.removeAll { $0.id == id }
+            sp.folders = sp.folders.map { var f = $0; if f.position > folder.position { f.position -= 1 }; return f }
+        }
+        if closeTabs { for t in folder.tabs { close(t) } }
+        return closeTabs ? folder.tabs : []
+    }
+
+    private func store_space(containing id: TabID) -> UUID? { space(containing: id)?.id }
+
     public func setIcon(_ icon: String?, for id: UUID) {
         mutateSpace(id) { $0.icon = icon }
     }

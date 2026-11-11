@@ -31,7 +31,8 @@ final class PaletteSource: PaletteDataSource {
         PaletteCommand(id: "pip", title: "Picture in Picture", aliases: ["pip", "float video"], icon: "pip.enter"),
         PaletteCommand(id: "tabsOnTop", title: "Switch Tab Layout (Sidebar / Top)", aliases: ["horizontal tabs", "vertical tabs", "tab bar"], icon: "rectangle.topthird.inset.filled"),
         PaletteCommand(id: "sidebar", title: "Toggle Sidebar", aliases: ["hide sidebar", "focus"], shortcut: "⌘S", icon: "sidebar.left"),
-        PaletteCommand(id: "sleep", title: "Put Background Tabs to Sleep", aliases: ["hibernate", "memory", "free"], shortcut: "⌥⌘H", icon: "moon.zzz"),
+        PaletteCommand(id: "sleep", title: "Put Background Tabs to Sleep", aliases: ["hibernate", "memory", "free"], shortcut: "⌃⌥⌘H", icon: "moon.zzz"),
+        PaletteCommand(id: "newFolder", title: "New Folder", aliases: ["folder", "group tabs"], shortcut: "⇧⌥⌘N", icon: "folder.badge.plus"),
         PaletteCommand(id: "newSpace", title: "New Space", aliases: ["profile", "container"], shortcut: "⌥⌘N", icon: "square.stack.3d.up"),
         PaletteCommand(id: "renameSpace", title: "Rename Space", aliases: ["name space"], icon: "pencil"),
         PaletteCommand(id: "deleteSpace", title: "Delete Space", aliases: ["remove space"], icon: "trash"),
@@ -189,6 +190,7 @@ final class PaletteSource: PaletteDataSource {
             case "pip": c.pictureInPictureAnywhere()
             case "sleep": c.hibernateCurrentSpaceBackground()
             case "newSpace": c.newSpace()
+            case "newFolder": c.newFolder()
             case "nextSpace": c.switchSpace(1)
             case "renameSpace": c.renameSpace()
             case "deleteSpace": c.deleteSpace()

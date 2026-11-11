@@ -88,6 +88,17 @@ enum DebugSnapshot {
                 services.store.move(p, to: .pinned)
                 c.refresh()
             }
+            if args.contains("--demo-folders"), let c = services.frontController {
+                let sid = c.windowSpace.id
+                let closed = services.store.newFolder(in: sid, name: "Reading list")
+                let open = services.store.newFolder(in: sid, name: "Project Aegis")
+                for u in ["https://github.com", "https://developer.apple.com/documentation/webkit"] {
+                    services.store.moveTab(services.store.openTab(URL(string: u), select: false, in: sid), toFolder: open)
+                }
+                services.store.moveTab(services.store.openTab(URL(string: "https://en.wikipedia.org/wiki/Arc_(web_browser)"), select: false, in: sid), toFolder: closed)
+                services.store.updateFolder(closed) { $0.isExpanded = false }
+                c.refresh()
+            }
             if args.contains("--organize"), let c = services.frontController {
                 let all = services.store.currentSpace.today
                 if all.count >= 4 {
