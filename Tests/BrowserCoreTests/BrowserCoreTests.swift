@@ -100,6 +100,17 @@ import Testing
         #expect(store.spaces.count == 1)
     }
 
+    @Test func damagedSessionsRestoreInsteadOfCrashing() {
+        let source = BrowserStore()
+        let t = source.openTab(URL(string: "https://a.com"))
+        var snap = source.snapshot()
+        snap.tabs += snap.tabs              // duplicate tab ids
+        snap.profiles = []                  // profile list lost
+        let restored = BrowserStore(snapshot: snap)
+        #expect(restored.tabs[t] != nil)
+        #expect(restored.profile(for: restored.currentSpace).id == restored.currentSpace.profileID)
+    }
+
     @Test func newSpacesFollowTheArchiveSetting() {
         let store = BrowserStore()
         store.setArchiveInterval(7 * 24 * 3600)

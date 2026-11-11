@@ -18,9 +18,16 @@ public final class BrowserStore {
 
     public init(snapshot: SessionSnapshot? = nil) {
         if let s = snapshot, !s.spaces.isEmpty {
-            profiles = s.profiles
+            // A damaged or hand-edited session must never crash launch:
+            // duplicate tab ids trapped Dictionary(uniqueKeysWithValues:), and
+            // a space whose profile is missing (or no profiles) trapped profiles[0].
+            var profiles = s.profiles
+            for id in Set(s.spaces.map(\.profileID)) where !profiles.contains(where: { $0.id == id }) {
+                profiles.append(Profile(id: id, name: "Personal"))
+            }
+            self.profiles = profiles
             spaces = s.spaces
-            tabs = Dictionary(uniqueKeysWithValues: s.tabs.map { ($0.id, $0) })
+            tabs = Dictionary(s.tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             archive = s.archive
             currentSpaceID = s.spaces.contains { $0.id == s.currentSpaceID } ? s.currentSpaceID : s.spaces[0].id
             // Every restored tab starts asleep; it wakes on selection.
