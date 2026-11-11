@@ -89,9 +89,19 @@ final class AppServices {
         let normal = store.spaces.first { $0.id == store.currentSpaceID && !store.ephemeralSpaces.contains($0.id) }
             ?? store.spaces.first { !store.ephemeralSpaces.contains($0.id) }
         let c = BrowserWindowController(app: self, spaceID: spaceID ?? normal?.id, isPrivate: isPrivate)
-        if let frame = frontController?.window?.frame {
-            // Cascade, so a new window doesn't land exactly on top of the last one.
-            c.window?.setFrameOrigin(NSPoint(x: frame.minX + 28, y: frame.minY - 28))
+        if let front = frontController?.window, !front.styleMask.contains(.fullScreen), let window = c.window {
+            // Cascade, so a new window doesn't land exactly on top of the last
+            // one, but keep it on the front window's screen (wrap to the top-left
+            // corner once it would run off the bottom or right edge).
+            let frame = front.frame
+            let visible = front.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? frame
+            var size = window.frame.size
+            size.width = min(size.width, visible.width)
+            size.height = min(size.height, visible.height)
+            var origin = NSPoint(x: frame.minX + 28, y: frame.maxY - 28 - size.height)
+            if origin.x + size.width > visible.maxX { origin.x = visible.minX }
+            if origin.y < visible.minY { origin.y = visible.maxY - size.height }
+            window.setFrame(NSRect(origin: origin, size: size), display: false)
         }
         controllers.append(c)
         c.showWindow(nil)

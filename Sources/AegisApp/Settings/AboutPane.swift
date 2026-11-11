@@ -33,7 +33,7 @@ struct AboutPane: View {
         .padding(.top, 8)
 
         HStack(spacing: 12) {
-            SettingsStat(value: "\(store.spaces.count)", label: "Spaces", systemImage: "square.grid.2x2.fill", tint: SettingsPane.spaces.tint)
+            SettingsStat(value: "\(store.spaces.count - store.ephemeralSpaces.count)", label: "Spaces", systemImage: "square.grid.2x2.fill", tint: SettingsPane.spaces.tint)
             SettingsStat(value: "\(store.tabs.count)", label: "Tabs", systemImage: "square.on.square", tint: SettingsPane.appearance.tint)
             SettingsStat(value: model.services.blocking.ruleCount.formatted(), label: "Blocking rules", systemImage: "shield.lefthalf.filled", tint: SettingsPane.privacy.tint)
         }

@@ -53,6 +53,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
         if spaceID == nil || !visible.contains(where: { $0.id == spaceID }) {
             spaceID = visible.first?.id
+            // Commands act on store.currentSpace: never leave it pointing at a
+            // space this (key) window can't show, e.g. another window's private one.
+            if window?.isKeyWindow == true, let spaceID { store.currentSpaceID = spaceID }
         }
     }
 
@@ -466,6 +469,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 Toast.show("Reader isn't available for this page", in: window)
                 return
             }
+            // The user may have switched tabs (or closed this one) while extracting.
+            guard windowSpace.selected == id, store.tabs[id] != nil else { return }
             reader.show(title: article.title, byline: article.byline, site: article.site, html: article.html)
             readerFor = id
             card.show(reader)
@@ -582,6 +587,9 @@ extension BrowserWindowController: SidebarDelegate {
     }
 
     func sidebarSpaceMenu() -> NSMenu? {
+        // A private window has exactly one throwaway space: nothing to rename,
+        // theme or delete (deleting it would show a normal space in a private window).
+        if isPrivateWindow { return nil }
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem(title: "Rename Space…") { [weak self] in self?.renameSpace() })
         let colors = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
@@ -620,8 +628,8 @@ extension BrowserWindowController: SidebarDelegate {
         menu.addItem(iconItem)
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(title: "New Space") { [weak self] in self?.newSpace() })
-        if store.spaces.count > 1 {
-            menu.addItem(ClosureMenuItem(title: "Delete “\(store.currentSpace.name)”…") { [weak self] in self?.deleteSpace() })
+        if visibleSpaces.count > 1 {
+            menu.addItem(ClosureMenuItem(title: "Delete “\(windowSpace.name)”…") { [weak self] in self?.deleteSpace() })
         }
         return menu
     }
@@ -631,31 +639,43 @@ extension BrowserWindowController: SidebarDelegate {
     func renameSpace() {
         let alert = NSAlert()
         alert.messageText = "Rename Space"
-        let field = NSTextField(string: store.currentSpace.name)
+        // The window's own space: a right-click in a background window doesn't make it key.
+        let target = windowSpace
+        let field = NSTextField(string: target.name)
         field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
         alert.accessoryView = field
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
-        guard let window, alert.runModal() == .alertFirstButtonReturn else { return }
-        _ = window
-        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
-        if !name.isEmpty { store.renameSpace(store.currentSpaceID, name: name) }
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { store.renameSpace(target.id, name: name) }
     }
 
-    func deleteSpace() {
-        let space = store.currentSpace
-        let alert = NSAlert()
-        alert.messageText = "Delete “\(space.name)”?"
-        alert.informativeText = "Closes its \(space.allTabs.count) tabs and deletes the space's cookies and website data."
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons.first?.hasDestructiveAction = true
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+    /// Deletes a space (default: this window's) with its tabs and, unless
+    /// another space shares it, its website data. Settings confirms on its
+    /// own and passes `confirm: false`.
+    func deleteSpace(_ id: UUID? = nil, confirm: Bool = true) {
+        guard !isPrivateWindow, visibleSpaces.count > 1 else { return }
+        guard let space = id.map({ i in visibleSpaces.first { $0.id == i } }) ?? windowSpace else { return }
+        if confirm {
+            let alert = NSAlert()
+            alert.messageText = "Delete “\(space.name)”?"
+            alert.informativeText = "Closes its \(space.allTabs.count) tabs and deletes the space's cookies and website data."
+            alert.addButton(withTitle: "Delete")
+            alert.addButton(withTitle: "Cancel")
+            alert.buttons.first?.hasDestructiveAction = true
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
         let profile = store.profile(for: space)
         let sharedProfile = store.spaces.filter { $0.profileID == profile.id }.count > 1
-        for id in space.allTabs { runtime.discard(id) }
         store.removeSpace(space.id)
+        guard !store.spaces.contains(where: { $0.id == space.id }) else { return }
+        for id in space.allTabs {
+            if let w = runtime.existingTab(id) { app.extensions.webTabDidClose(w) }
+            runtime.discard(id)
+        }
+        if let r = readerFor, space.allTabs.contains(r) { readerFor = nil }
         if !sharedProfile {
             // Delete means gone: the profile's website data store is removed from disk.
             let runtime = runtime
@@ -840,10 +860,10 @@ extension BrowserWindowController: SidebarDelegate {
         })
         folderItem.submenu = folderMenu
         menu.addItem(folderItem)
-        if store.spaces.count > 1 {
+        if visibleSpaces.count > 1 {
             let move = NSMenuItem(title: "Move to Space", action: nil, keyEquivalent: "")
             let sub = NSMenu()
-            for space in store.spaces where space.id != store.space(containing: id)?.id {
+            for space in visibleSpaces where space.id != store.space(containing: id)?.id {
                 sub.addItem(ClosureMenuItem(title: space.name) { [weak self] in self?.app.move(id, toSpace: space.id) })
             }
             move.submenu = sub

@@ -89,6 +89,25 @@ import Testing
         #expect(store.spaces.count == 1)
     }
 
+    @Test func removingASpaceNeverLandsOnAPrivateOne() {
+        let store = BrowserStore()
+        let personal = store.spaces[0]
+        let priv = store.addSpace(name: "Private", accentHue: 0.7, newProfile: true)
+        store.ephemeralSpaces.insert(priv.id)
+        let work = store.addSpace(name: "Work", accentHue: 0.6, newProfile: true)
+        // Order: Personal, Private, Work. Deleting Work must not select Private.
+        store.currentSpaceID = work.id
+        store.removeSpace(work.id)
+        #expect(store.currentSpaceID == personal.id)
+        // The last normal space can't go, even though a private one remains.
+        #expect(store.removeSpace(personal.id).isEmpty)
+        #expect(store.spaces.contains { $0.id == personal.id })
+        // Private spaces themselves can still be removed (window closed).
+        store.currentSpaceID = priv.id
+        store.removeSpace(priv.id)
+        #expect(store.currentSpaceID == personal.id)
+    }
+
     @Test func spacesHaveSeparateProfilesWhenAsked() {
         let store = BrowserStore()
         let work = store.addSpace(name: "Work", accentHue: 0.6, newProfile: true)

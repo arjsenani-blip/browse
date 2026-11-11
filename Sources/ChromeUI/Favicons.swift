@@ -64,12 +64,17 @@ public final class Favicons {
         }
     }
 
-    private static var darkness: [ObjectIdentifier: Bool] = [:]
+    /// Weakly keyed by the image: an ObjectIdentifier key outlives its image,
+    /// grows without bound, and hands a freed icon's answer to whichever new
+    /// image reuses the address.
+    private static let darkness = NSMapTable<NSImage, NSNumber>.weakToStrongObjects()
 
-    /// True for icons that are mostly dark ink (they need a light plate on dark themes).
+    /// True for icons that are mostly dark ink (they need a light plate on dark
+    /// themes). The globe placeholder is tinted for both and never gets one
+    /// (it used to read as "dark" and showed as a blank white tile).
     public static func isDark(_ image: NSImage) -> Bool {
-        let key = ObjectIdentifier(image)
-        if let known = darkness[key] { return known }
+        if image === placeholderImage { return false }
+        if let known = darkness.object(forKey: image) { return known.boolValue }
         var dark = false
         if let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
             let w = 16, h = 16
@@ -86,15 +91,17 @@ public final class Favicons {
                 dark = weight > 8 && lum / weight < 0.22
             }
         }
-        darkness[key] = dark
+        darkness.setObject(NSNumber(value: dark), forKey: image)
         return dark
     }
 
     /// A neutral placeholder for sites without an icon: the system globe,
-    /// tinted secondary so it reads in light and dark.
-    public static func placeholder(hue: Double? = nil) -> NSImage {
+    /// tinted secondary so it reads in light and dark. One shared instance.
+    public static func placeholder(hue: Double? = nil) -> NSImage { placeholderImage }
+
+    private static let placeholderImage: NSImage = {
         let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
             .applying(.init(paletteColors: [NSColor.secondaryLabelColor]))
         return NSImage(systemSymbolName: "globe", accessibilityDescription: nil)?.withSymbolConfiguration(config) ?? NSImage()
-    }
+    }()
 }

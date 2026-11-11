@@ -135,17 +135,26 @@ public final class BrowserStore {
         }
     }
 
-    /// Removes a space and its tabs. The last space can't be removed.
+    /// Removes a space and its tabs. The last space can't be removed, and
+    /// neither can the last normal one (private spaces don't count: they
+    /// vanish with their window and would leave normal windows nothing to show).
     @discardableResult
     public func removeSpace(_ id: UUID) -> [TabID] {
         guard spaces.count > 1, let i = spaces.firstIndex(where: { $0.id == id }) else { return [] }
+        let wasEphemeral = ephemeralSpaces.contains(id)
+        if !wasEphemeral, !spaces.contains(where: { $0.id != id && !ephemeralSpaces.contains($0.id) }) { return [] }
         let removed = spaces[i].allTabs
         for t in removed { tabs[t] = nil }
         let profile = spaces[i].profileID
         ephemeralSpaces.remove(id)
         spaces.remove(at: i)
         if !spaces.contains(where: { $0.profileID == profile }) { profiles.removeAll { $0.id == profile } }
-        if currentSpaceID == id { currentSpaceID = spaces[max(0, i - 1)].id }
+        if currentSpaceID == id {
+            // The neighbour, but never a private window's space for a normal one.
+            let candidates = spaces.indices.filter { wasEphemeral || !ephemeralSpaces.contains(spaces[$0].id) }
+            let next = candidates.last { $0 < i } ?? candidates.first ?? max(0, i - 1)
+            currentSpaceID = spaces[next].id
+        }
         return removed
     }
 

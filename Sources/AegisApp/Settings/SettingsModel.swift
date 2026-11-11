@@ -135,6 +135,10 @@ final class SettingsModel {
 
     func isPrivate(_ space: Space) -> Bool { services.privateProfiles.contains(space.profileID) }
 
+    /// Spaces Settings can list and edit: a private window's throwaway space
+    /// is never listed, renamed, themed or deleted from here.
+    var spaces: [Space] { store.spaces.filter { !store.ephemeralSpaces.contains($0.id) } }
+
     /// Other spaces that share this space's cookies and logins.
     func spacesSharingProfile(with space: Space) -> [Space] {
         store.spaces.filter { $0.profileID == space.profileID && $0.id != space.id }
@@ -164,13 +168,15 @@ final class SettingsModel {
         services.forEachController { $0.refresh() }
     }
 
-    /// Deletes a space. The current space goes through the window's own flow
-    /// (which confirms); any other space was confirmed by the caller and is
-    /// removed here with the same semantics.
+    /// Deletes a space the caller already confirmed (no second alert). A normal
+    /// window does the work so tabs, reader and extensions are torn down the
+    /// same way as from the sidebar; with no window open it's done here.
     func deleteSpace(_ id: UUID) {
-        guard store.spaces.count > 1, let space = store.spaces.first(where: { $0.id == id }) else { return }
-        if id == store.currentSpaceID, let front = services.frontController {
-            front.deleteSpace()
+        guard spaces.count > 1, let space = spaces.first(where: { $0.id == id }) else { return }
+        var window = services.frontController.flatMap { $0.isPrivateWindow ? nil : $0 }
+        if window == nil { services.forEachController { c in if window == nil, !c.isPrivateWindow { window = c } } }
+        if let window {
+            window.deleteSpace(id, confirm: false)
         } else {
             let profile = store.profile(for: space)
             let sharedProfile = store.spaces.filter { $0.profileID == profile.id }.count > 1

@@ -59,6 +59,8 @@ enum Menus {
             item("Reload Page", #selector(AppDelegate.reload), "r", target: target),
             item("Actual Size", #selector(AppDelegate.zoomReset), "0", target: target),
             item("Zoom In", #selector(AppDelegate.zoomIn), "+", target: target),
+            // ⌘= is what people press for zoom in (no Shift needed on most layouts).
+            hidden(item("Zoom In", #selector(AppDelegate.zoomIn), "=", target: target)),
             item("Zoom Out", #selector(AppDelegate.zoomOut), "-", target: target),
             .separator(),
             item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control], target: nil),
@@ -69,7 +71,10 @@ enum Menus {
             item("Forward", #selector(AppDelegate.goForward), "]", target: target),
             .separator(),
             item("Next Tab", #selector(AppDelegate.nextTab), "\t", [.control], target: target),
-            item("Previous Tab", #selector(AppDelegate.previousTab), "\t", [.control, .shift], target: target),
+            // Shift turns Tab into back-tab (U+0019) before menu matching.
+            item("Previous Tab", #selector(AppDelegate.previousTab), "\u{19}", [.control, .shift], target: target),
+            hidden(item("Next Tab", #selector(AppDelegate.nextTab), "]", [.command, .shift], target: target)),
+            hidden(item("Previous Tab", #selector(AppDelegate.previousTab), "[", [.command, .shift], target: target)),
             item("Pin / Unpin Tab", #selector(AppDelegate.togglePin), "p", [.command, .shift], target: target),
             item("Add to Favorites", #selector(AppDelegate.toggleFavorite), "d", target: target),
             item("Put Background Tabs to Sleep", #selector(AppDelegate.hibernateBackground), "h", [.command, .option, .control], target: target),
@@ -103,6 +108,8 @@ enum Menus {
         let window = submenu("Window", [
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m", target: nil),
             item("Zoom", #selector(NSWindow.performZoom(_:)), "", target: nil),
+            .separator(),
+            item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:)), "", target: nil),
         ])
         NSApp.windowsMenu = window.submenu
         main.addItem(window)
@@ -115,6 +122,13 @@ enum Menus {
         items.forEach(menu.addItem)
         top.submenu = menu
         return top
+    }
+
+    /// Keeps a shortcut alive without showing a duplicate row.
+    private static func hidden(_ i: NSMenuItem) -> NSMenuItem {
+        i.isHidden = true
+        i.allowsKeyEquivalentWhenHidden = true
+        return i
     }
 
     private static func item(_ title: String, _ action: Selector, _ key: String, _ mods: NSEvent.ModifierFlags = [.command], target: AnyObject?) -> NSMenuItem {

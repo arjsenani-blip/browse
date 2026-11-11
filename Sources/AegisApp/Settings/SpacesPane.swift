@@ -7,7 +7,7 @@ struct SpacesPane: View {
     @State private var confirmDelete: Space?
 
     private var selected: Space? {
-        model.store.spaces.first { $0.id == model.selectedSpaceID } ?? model.store.spaces.first
+        model.spaces.first { $0.id == model.selectedSpaceID } ?? model.spaces.first
     }
 
     var body: some View {
@@ -44,7 +44,7 @@ private struct SpaceList: View {
     var body: some View {
         SettingsCard(title: "Your spaces", padding: 12, fillHeight: true) {
             VStack(spacing: 2) {
-                ForEach(model.store.spaces) { space in
+                ForEach(model.spaces) { space in
                     SpaceRow(space: space,
                              selected: space.id == selectedID,
                              current: space.id == model.store.currentSpaceID,
@@ -60,7 +60,7 @@ private struct SpaceList: View {
                         .accessibilityAction(named: "Move down") { move(space, by: 1) }
                 }
             }
-            .animation(.smooth(duration: 0.2), value: model.store.spaces.map(\.id))
+            .animation(.smooth(duration: 0.2), value: model.spaces.map(\.id))
             Spacer(minLength: 0)
             Divider()
             HStack {
@@ -77,12 +77,12 @@ private struct SpaceList: View {
     }
 
     private func move(_ space: Space, by delta: Int) {
-        let spaces = model.store.spaces
+        let spaces = model.spaces
         guard let i = spaces.firstIndex(where: { $0.id == space.id }) else { return }
         let j = i + delta
         guard spaces.indices.contains(j) else { return }
-        model.store.moveSpace(from: i, to: delta > 0 ? j + 1 : j)
-        model.services.forEachController { $0.refresh() }
+        // By id: the list hides private spaces, so its indices aren't the store's.
+        model.moveSpace(space.id, before: spaces[j].id)
     }
 }
 
@@ -204,8 +204,8 @@ private struct SpaceDetail: View {
                         Label("Delete Space…", systemImage: "trash")
                     }
                     .controlSize(.small)
-                    .disabled(model.store.spaces.count < 2)
-                    .help(model.store.spaces.count < 2 ? "The last space can't be deleted" : "Close its tabs and delete its website data")
+                    .disabled(model.spaces.count < 2)
+                    .help(model.spaces.count < 2 ? "The last space can't be deleted" : "Close its tabs and delete its website data")
                 }
             }
             .padding(16)
