@@ -464,7 +464,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     func toggleReader() {
         guard let id = store.selectedTab?.id, let tab = runtime.tab(id) else { return }
         if readerFor == id { exitReader(); return }
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             guard let article = await tab.extractArticle() else {
                 Toast.show("Reader isn't available for this page", in: window)
                 return
