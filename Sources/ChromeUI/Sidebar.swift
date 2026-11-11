@@ -110,6 +110,8 @@ public protocol SidebarDelegate: AnyObject {
     func sidebarWillSwipe(toSpace index: Int)
     func sidebarSpaceMenu() -> NSMenu?
     func sidebarClearToday()
+    /// Items for the footer "+" menu (New Tab, New Folder, New Space…).
+    func sidebarNewMenu() -> NSMenu?
     /// Live position between two spaces (0 = `from`, 1 = `to`) for the background cross-fade;
     /// a negative fraction means "animate from `from` to `to`" (keyboard or dot switch).
     func sidebarSwipeProgress(from: Int, to: Int, fraction: Double)
@@ -132,7 +134,6 @@ public final class SidebarViewController: NSViewController {
     private var pages: [SpacePageView] = []
     private let nowPlayingView = NowPlayingStrip()
     private let spaceDots = NSStackView()
-    private let spaceLabel = NSTextField(labelWithString: "")
     private let libraryButton = SidebarViewController.iconButton("tray.and.arrow.down", "Library: Downloads and Media")
     private let libraryBadge = NSTextField(labelWithString: "")
 
@@ -161,10 +162,9 @@ public final class SidebarViewController: NSViewController {
 
         let spaceMenuHost = MenuHostView()
         spaceMenuHost.menuProvider = { [weak self] in self?.delegate?.sidebarSpaceMenu() }
-        spaceLabel.font = .systemFont(ofSize: 11, weight: .semibold)
-        spaceLabel.textColor = Tokens.secondaryInk
         spaceDots.spacing = 5
-        let spaceGroup = NSStackView(views: [spaceDots, spaceLabel])
+        // Just the chips: the space's name is in each chip's tooltip and in Settings.
+        let spaceGroup = NSStackView(views: [spaceDots])
         spaceGroup.spacing = 8
         spaceGroup.translatesAutoresizingMaskIntoConstraints = false
         spaceMenuHost.addSubview(spaceGroup)
@@ -174,8 +174,9 @@ public final class SidebarViewController: NSViewController {
         ])
         spaceMenuHost.toolTip = "Swipe with two fingers to switch spaces. Right-click to rename or recolour."
 
-        let newTab = SidebarViewController.iconButton("plus", "New Tab (⌘T)")
-        newTab.target = self; newTab.action = #selector(newTabClicked)
+        let newTab = SidebarViewController.iconButton("plus", "New…")
+        newTab.target = self; newTab.action = #selector(newMenuClicked(_:))
+        newTab.setAccessibilityLabel("New tab, folder or space")
         libraryButton.target = self; libraryButton.action = #selector(libraryClicked)
         libraryBadge.font = .monospacedDigitSystemFont(ofSize: 9, weight: .bold)
         libraryBadge.textColor = .white
@@ -307,7 +308,6 @@ public final class SidebarViewController: NSViewController {
         for (i, v) in spaceDots.arrangedSubviews.enumerated() where state.pages.indices.contains(i) {
             (v as? SpaceChip)?.set(page: state.pages[i], on: i == state.currentIndex, style: state.style)
         }
-        spaceLabel.stringValue = state.spaceName
         // One chip is just noise; show the name alone until there's a second space.
         spaceDots.isHidden = count < 2
     }
@@ -553,6 +553,12 @@ public final class SidebarViewController: NSViewController {
     @objc private func forward() { delegate?.sidebarForward() }
     @objc private func reload() { delegate?.sidebarReload() }
     @objc private func newTabClicked() { delegate?.sidebarNewTab() }
+
+    /// The footer "+" opens a small "New…" menu (Arc-style) above the button.
+    @objc private func newMenuClicked(_ sender: NSButton) {
+        guard let menu = delegate?.sidebarNewMenu() else { delegate?.sidebarNewTab(); return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
     @objc private func libraryClicked() { delegate?.sidebarOpenLibrary(from: libraryButton) }
 
     static func iconButton(_ symbol: String, _ label: String) -> NSButton {

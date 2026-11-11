@@ -6,3 +6,4 @@ DerivedData/
 .DS_Store
 design/stageshow/shots/
 .build-*/
+.claude/

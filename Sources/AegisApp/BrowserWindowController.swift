@@ -657,6 +657,31 @@ extension BrowserWindowController: SidebarDelegate {
         }
     }
 
+    func sidebarNewMenu() -> NSMenu? {
+        let menu = NSMenu()
+        func add(_ title: String, _ symbol: String, _ key: String = "", _ mods: NSEvent.ModifierFlags = [.command], enabled: Bool = true, _ action: @escaping () -> Void) {
+            let item = ClosureMenuItem(title: title, action: action)
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            item.keyEquivalent = key
+            item.keyEquivalentModifierMask = mods
+            item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        menu.autoenablesItems = false
+        add("New Tab", "plus.square", "t") { [weak self] in self?.openPalette(.newTab) }
+        add("New Folder", "folder.badge.plus", enabled: newFolderAvailable) { [weak self] in self?.newFolder() }
+        menu.addItem(.separator())
+        add("New Space", "square.stack.3d.up", "n", [.command, .option], enabled: !isPrivateWindow) { [weak self] in self?.newSpace() }
+        add("New Private Window", "eye.slash", "n", [.command, .shift]) { (NSApp.delegate as? AppDelegate)?.newPrivateWindow() }
+        menu.addItem(.separator())
+        add("Import from Arc, Chrome or Safari…", "square.and.arrow.down") { (NSApp.delegate as? AppDelegate)?.importBrowserData() }
+        return menu
+    }
+
+    /// Folders arrive with the folder model; until then the menu item is disabled.
+    var newFolderAvailable: Bool { false }
+    func newFolder() {}
+
     func sidebarClearToday() {
         let space = windowSpace
         let removed = store.clearToday(in: space.id)
