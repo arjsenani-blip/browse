@@ -14,6 +14,10 @@ public final class ContentCard: NSView {
     /// detached (and its process suspended) for minutes: it comes back white though fully loaded.
     private var detachedAt: [ObjectIdentifier: CFTimeInterval] = [:]
     private var trailing: NSLayoutConstraint?
+    /// Split panes only: an × on hover that takes this pane out of the split (the tab stays open).
+    public var onUnsplit: (() -> Void)?
+    private let unsplitButton = NSButton()
+    private var hoverArea: NSTrackingArea?
 
     public override init(frame: NSRect) {
         super.init(frame: frame)
@@ -28,6 +32,18 @@ public final class ContentCard: NSView {
         clip.layer?.cornerRadius = Tokens.Radius.contentCard
         clip.layer?.cornerCurve = .continuous
         clip.layer?.masksToBounds = true
+        unsplitButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Remove from Split View")
+        unsplitButton.symbolConfiguration = .init(pointSize: 10, weight: .bold)
+        unsplitButton.isBordered = false
+        unsplitButton.wantsLayer = true
+        unsplitButton.layer?.cornerRadius = 11
+        unsplitButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        unsplitButton.contentTintColor = .white
+        unsplitButton.toolTip = "Remove from Split View (⌃⇧−). The tab stays open."
+        unsplitButton.target = self
+        unsplitButton.action = #selector(unsplitClicked)
+        unsplitButton.alphaValue = 0
+        unsplitButton.isHidden = true
         clip.layer?.borderWidth = 0.5
         snapshotView.imageScaling = .scaleAxesIndependently
         snapshotView.isHidden = true
@@ -47,9 +63,67 @@ public final class ContentCard: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     public override var wantsUpdateLayer: Bool { true }
+    /// nil: not split. true/false: a split pane, focused or not; the focused one gets an accent ring.
+    private var paneFocus: Bool?
+    private var paneHue: Double = 0.48
+
+    @objc private func unsplitClicked() { onUnsplit?() }
+
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let a = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(a)
+        hoverArea = a
+    }
+
+    public override func mouseEntered(with event: NSEvent) { setUnsplitVisible(paneFocus != nil) }
+    public override func mouseExited(with event: NSEvent) { setUnsplitVisible(false) }
+
+    private func setUnsplitVisible(_ visible: Bool) {
+        if unsplitButton.superview == nil {
+            unsplitButton.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(unsplitButton)
+            NSLayoutConstraint.activate([
+                unsplitButton.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+                unsplitButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+                unsplitButton.widthAnchor.constraint(equalToConstant: 22),
+                unsplitButton.heightAnchor.constraint(equalToConstant: 22),
+            ])
+        }
+        addSubview(unsplitButton, positioned: .above, relativeTo: nil)
+        if visible { unsplitButton.isHidden = false }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = Tokens.Motion.duration(0.12)
+            unsplitButton.animator().alphaValue = visible ? 1 : 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated { if !visible, self?.unsplitButton.alphaValue == 0 { self?.unsplitButton.isHidden = true } }
+        })
+    }
+
+    public func setPaneFocus(_ focus: Bool?, hue: Double) {
+        if focus == nil { setUnsplitVisible(false) }
+        guard focus != paneFocus || hue != paneHue else { return }
+        paneFocus = focus
+        paneHue = hue
+        needsDisplay = true
+        applyBorder()
+    }
+
+    private func applyBorder() {
+        let ring = paneFocus == true && !NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            ? Tokens.accent(hue: paneHue).withAlphaComponent(0.8) : nil
+        let contrast = paneFocus == true ? NSColor.controlAccentColor : NSColor.separatorColor
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = Tokens.Motion.duration(0.15)
+            clip.layer?.borderWidth = paneFocus == true ? 2 : 0.5
+            clip.layer?.borderColor = (ring ?? contrast).cgColor
+        }
+    }
+
     public override func updateLayer() {
         clip.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-        clip.layer?.borderColor = NSColor.separatorColor.cgColor
+        applyBorder()
         layer?.shadowColor = NSColor.black.cgColor
     }
 
@@ -67,7 +141,8 @@ public final class ContentCard: NSView {
             if detachedAt.count > 256 { detachedAt.removeAll() }
             detachedAt[ObjectIdentifier(old)] = CACurrentMediaTime()
         }
-        current?.removeFromSuperview()
+        // A page can move to another pane's card; only take it out if it's still ours.
+        if let old = current, old.superview === clip { old.removeFromSuperview() }
         current = view
         emptyView.isHidden = view != nil
         if let view {

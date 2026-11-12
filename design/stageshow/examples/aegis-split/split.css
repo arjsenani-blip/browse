@@ -1,0 +1,39 @@
+/* Main column becomes a transparent tray holding one card per pane. */
+.as-stage .as-window[data-kind="sidebar"] .ss-window__main { background: transparent; box-shadow: none; overflow: visible; margin: 8px 8px 8px 2px; border-radius: 0; }
+.as-stage .as-window .ss-window__main > .ss-window__bar { display: none; }
+.as-stage .as-window .ss-window__side { transition: width .26s cubic-bezier(.2,.9,.25,1), opacity .18s; overflow: hidden; }
+.as-stage .as-root[data-collapsed] .ss-window__side { opacity: 0; }
+.as-stage .as-root[data-collapsed] .ss-window__lights { opacity: 0; transition: opacity .15s; }
+.as-stage .as-body { background: transparent; height: 100%; }
+.as-stage .as-panes { display: flex; gap: 8px; height: 100%; }
+.as-stage .as-pane { flex: 1; min-width: 0; border-radius: 10px; background: var(--ss-surface); box-shadow: var(--ab-card-shadow); overflow: hidden; position: relative; transition: box-shadow .18s; }
+.as-stage .as-pane[data-focus] { box-shadow: var(--ab-card-shadow), 0 0 0 2px rgba(14,138,126,.75); }
+.as-stage .as-pane__page { display: flex; flex-direction: column; gap: 11px; padding: 44px 36px; }
+.as-stage .as-doc__h { font: 650 19px/1.25 -apple-system, system-ui; color: var(--ss-ink-1, #14211f); margin-bottom: 6px; }
+.as-stage .as-doc__gap { height: 8px; }
+.as-stage .as-pane__page--video { padding: 20px; }
+.as-stage .as-video { aspect-ratio: 16/9; border-radius: 8px; background: linear-gradient(135deg,#2b3a55,#6d5bd0 55%,#e98a9b); margin-bottom: 8px; }
+/* Sidebar top row: collapse button right after the lights, nav on the right. */
+.as-stage .as-top { position: absolute; top: 8px; left: 82px; right: 14px; display: flex; align-items: center; gap: 12px; color: var(--ab-side-faint); }
+.as-stage .as-top__nav { margin-left: auto; display: flex; gap: 14px; }
+.as-stage .ab-nav { display: none; }
+.as-stage .as-toggle { display: grid; place-items: center; width: 24px; height: 22px; border-radius: 6px; }
+/* Split row: one rounded row, a segment per pane, the focused segment lifted. */
+.as-stage .as-splitrow { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--ab-sel, rgba(255,255,255,.55)); box-shadow: 0 1px 2px rgba(0,40,40,.10); }
+.as-stage .as-seg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; color: var(--ab-side-ink); }
+.as-stage .as-seg[data-focus] { background: rgba(255,255,255,.85); font-weight: 560; box-shadow: 0 0.5px 1.5px rgba(0,40,40,.16); }
+.as-stage .as-seg__t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.as-stage .as-foot { margin-top: auto; }
+/* Collapsed: a reopen button where the toggle was, and a hot edge. */
+.as-stage .as-reopen { position: absolute; top: 14px; left: 16px; display: grid; place-items: center; width: 28px; height: 24px; border-radius: 7px; color: #0b2b28; background: rgba(255,255,255,.6); box-shadow: 0 1px 3px rgba(0,40,40,.18); opacity: 0; transform: scale(.9); transition: opacity .18s, transform .22s cubic-bezier(.2,.9,.3,1.2); pointer-events: none; z-index: 3; }
+.as-stage .as-reopen[data-show] { opacity: 1; transform: none; }
+.as-stage .as-edge { position: absolute; left: 0; top: 200px; width: 6px; height: 200px; }
+/* Peek: the sidebar floats over the page as a rounded, shadowed panel. */
+.as-stage .as-peek { position: absolute; top: 8px; bottom: 8px; left: 8px; width: 236px; border-radius: 14px; background: linear-gradient(180deg,#bfe9e1,#a7d8e2); box-shadow: 0 0 0 .5px rgba(0,40,40,.18), 0 20px 50px -14px rgba(0,40,50,.45); transform: translateX(-260px); transition: transform .26s cubic-bezier(.2,.9,.25,1); z-index: 4; }
+.as-stage .as-peek[data-show] { transform: none; }
+.as-stage .as-peek .as-side { position: relative; padding-top: 44px; }
+.as-stage .as-peek .as-top { left: 14px; }
+.as-stage .as-lights { display: flex; gap: 8px; margin-right: 6px; }
+.as-stage .as-lights i { width: 12px; height: 12px; border-radius: 6px; background: #ff5f57; }
+.as-stage .as-lights i:nth-child(2) { background: #febc2e; }
+.as-stage .as-lights i:nth-child(3) { background: #28c840; }

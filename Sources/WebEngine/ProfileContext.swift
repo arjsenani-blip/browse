@@ -75,7 +75,7 @@ public final class ProfileContext {
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.defaultWebpagePreferences.preferredHTTPSNavigationPolicy = settings.httpsOnly ? .userMediatedFallbackToHTTP : .keepAsRequested
         config.upgradeKnownHostsToHTTPS = true
-        config.applicationNameForUserAgent = "Version/26.0 Safari/605.1.15"
+        config.applicationNameForUserAgent = "Version/27.0 Safari/605.1.15"
         extensionHost?.configure(config)
         return config
     }

@@ -82,6 +82,7 @@ public final class BrowserStore {
         let index = ordered.firstIndex(of: id) ?? 0
         mutateSpace(owner.id) { space in
             space.remove(id)
+            space.removeFromSplits(id)
             if space.selected == id {
                 let rest = space.allTabs
                 space.selected = rest.isEmpty ? nil : rest[min(index, rest.count - 1)]
@@ -174,9 +175,58 @@ public final class BrowserStore {
     public func newFolder(in spaceID: UUID, name: String = "Untitled") -> UUID {
         let folder = Folder(name: name, position: 0)
         mutateSpace(spaceID) { space in
-            space.folders = space.folders.map { var f = $0; f.position += 1; return f } + [folder]
+            // Shift top-level siblings only; nested folders keep their own order.
+            space.folders = space.folders.map { var f = $0; if f.parentID == nil { f.position += 1 }; return f } + [folder]
         }
         return folder.id
+    }
+
+    /// Creates an empty subfolder at the top of `parent`. Returns nil if the
+    /// parent doesn't exist or the new folder would exceed `Space.maxFolderDepth`.
+    @discardableResult
+    public func newSubfolder(in parent: UUID, name: String = "Untitled") -> UUID? {
+        guard let space = spaces.first(where: { $0.folders.contains { $0.id == parent } }),
+              space.depth(of: parent) + 1 < Space.maxFolderDepth else { return nil }
+        let folder = Folder(name: name, position: 0, parentID: parent)
+        mutateSpace(space.id) { sp in
+            sp.folders = sp.folders.map { var f = $0; if f.parentID == parent { f.position += 1 }; return f } + [folder]
+            if let pi = sp.folders.firstIndex(where: { $0.id == parent }) { sp.folders[pi].isExpanded = true }
+        }
+        return folder.id
+    }
+
+    /// Moves a folder (with everything inside it) under another folder, or to
+    /// the top level with `toParent: nil`, at `position` among its new siblings.
+    /// Refuses moves across spaces, into itself or its own subtree, and moves
+    /// that would nest deeper than `Space.maxFolderDepth`. Returns success.
+    @discardableResult
+    public func moveFolder(_ id: UUID, toParent parent: UUID?, at position: Int? = nil) -> Bool {
+        guard let space = spaces.first(where: { $0.folders.contains { $0.id == id } }),
+              let folder = space.folders.first(where: { $0.id == id }) else { return false }
+        if let parent {
+            guard space.folders.contains(where: { $0.id == parent }),
+                  parent != id, !space.descendants(of: id).contains(parent),
+                  space.depth(of: parent) + 1 + space.subtreeHeight(of: id) < Space.maxFolderDepth else { return false }
+        }
+        let oldParent = folder.parentID, oldPosition = folder.position
+        mutateSpace(space.id) { sp in
+            // Close the gap in the old sibling scope…
+            sp.folders = sp.folders.map { var f = $0
+                if f.id != id, f.parentID == oldParent, f.position > oldPosition { f.position -= 1 }
+                return f }
+            // …then open a slot in the new one.
+            let siblings = sp.folders.filter { $0.parentID == parent && $0.id != id }
+            let slot = min(max(0, position ?? siblings.count), siblings.count + (parent == nil ? sp.pinned.count : 0))
+            sp.folders = sp.folders.map { var f = $0
+                if f.id != id, f.parentID == parent, f.position >= slot { f.position += 1 }
+                return f }
+            if let fi = sp.folders.firstIndex(where: { $0.id == id }) {
+                sp.folders[fi].parentID = parent
+                sp.folders[fi].position = slot
+            }
+            if let parent, let pi = sp.folders.firstIndex(where: { $0.id == parent }) { sp.folders[pi].isExpanded = true }
+        }
+        return true
     }
 
     public func updateFolder(_ id: UUID, _ change: (inout Folder) -> Void) {
@@ -219,20 +269,96 @@ public final class BrowserStore {
         mutateSpace(space.id) { sp in sp.folders = sp.folders.map { var f = $0; f.tabs.removeAll { $0 == tabID }; return f } }
     }
 
-    /// Deletes a folder. `closeTabs: false` keeps its tabs as loose pinned tabs.
+    /// Deletes a folder.
+    /// - `closeTabs: false`: its tabs and subfolders move up one level into its
+    ///   parent (loose pinned tabs at the top level), keeping their order.
+    /// - `closeTabs: true`: the folder, all subfolders and every tab inside are removed.
+    /// Returns the tabs that were closed.
     @discardableResult
     public func deleteFolder(_ id: UUID, closeTabs: Bool) -> [TabID] {
         guard let space = spaces.first(where: { $0.folders.contains { $0.id == id } }),
               let folder = space.folders.first(where: { $0.id == id }) else { return [] }
+        let parent = folder.parentID
+        if closeTabs {
+            let subtree = Set([id] + space.descendants(of: id))
+            let doomed = space.allTabs(inFolder: id)
+            mutateSpace(space.id) { sp in
+                sp.folders.removeAll { subtree.contains($0.id) }
+                sp.folders = sp.folders.map { var f = $0
+                    if f.parentID == parent, f.position > folder.position { f.position -= 1 }
+                    return f }
+            }
+            for t in doomed { close(t) }
+            return doomed
+        }
+        let children = space.subfolders(of: id)
         mutateSpace(space.id) { sp in
             sp.folders.removeAll { $0.id == id }
-            sp.folders = sp.folders.map { var f = $0; if f.position > folder.position { f.position -= 1 }; return f }
+            // Make room in the parent's scope, then hoist the subfolders into the slot.
+            sp.folders = sp.folders.map { var f = $0
+                if f.parentID == parent, f.position > folder.position { f.position += max(0, children.count - 1) }
+                return f }
+            for (offset, child) in children.enumerated() {
+                if let ci = sp.folders.firstIndex(where: { $0.id == child.id }) {
+                    sp.folders[ci].parentID = parent
+                    sp.folders[ci].position = folder.position + offset
+                }
+            }
+            // Tabs of a nested folder move into its parent; at the top level they become loose.
+            if let parent, let pi = sp.folders.firstIndex(where: { $0.id == parent }) {
+                sp.folders[pi].tabs += folder.tabs.filter { !sp.folders[pi].tabs.contains($0) }
+            }
         }
-        if closeTabs { for t in folder.tabs { close(t) } }
-        return closeTabs ? folder.tabs : []
+        return []
     }
 
     private func store_space(containing id: TabID) -> UUID? { space(containing: id)?.id }
+
+    // MARK: Split view
+
+    /// Shows `other` beside `id` (after it, or at `index` in the split). Joins `id`'s split if it has
+    /// one. Both must be in the same space; refuses a fifth pane. Returns the split's ID.
+    @discardableResult
+    public func split(_ id: TabID, with other: TabID, at index: Int? = nil) -> UUID? {
+        guard id != other, let owner = space(containing: id), space(containing: other)?.id == owner.id else { return nil }
+        var result: UUID?
+        mutateSpace(owner.id) { space in
+            space.removeFromSplits(other)
+            if let i = space.splits.firstIndex(where: { $0.tabs.contains(id) }) {
+                guard space.splits[i].tabs.count < SplitGroup.maxPanes else { return }
+                let at = index ?? (space.splits[i].tabs.firstIndex(of: id)! + 1)
+                space.splits[i].tabs.insert(other, at: min(max(at, 0), space.splits[i].tabs.count))
+                space.splits[i].fractions = nil
+                result = space.splits[i].id
+            } else {
+                let tabs = index == 0 ? [other, id] : [id, other]
+                let group = SplitGroup(tabs: tabs)
+                space.splits.append(group)
+                result = group.id
+            }
+        }
+        return result
+    }
+
+    /// Takes one tab out of its split (the rest stay split if two or more remain).
+    public func removeFromSplit(_ id: TabID) {
+        guard let owner = space(containing: id) else { return }
+        mutateSpace(owner.id) { $0.removeFromSplits(id) }
+    }
+
+    /// Dissolves a split; its tabs stay where they are in the sidebar.
+    public func separate(_ splitID: UUID) {
+        guard let owner = spaces.first(where: { $0.splits.contains { $0.id == splitID } }) else { return }
+        mutateSpace(owner.id) { $0.splits.removeAll { $0.id == splitID } }
+    }
+
+    public func updateSplit(_ splitID: UUID, _ change: (inout SplitGroup) -> Void) {
+        guard let owner = spaces.first(where: { $0.splits.contains { $0.id == splitID } }) else { return }
+        mutateSpace(owner.id) { space in
+            guard let i = space.splits.firstIndex(where: { $0.id == splitID }) else { return }
+            change(&space.splits[i])
+        }
+    }
 
     public func setIcon(_ icon: String?, for id: UUID) {
         mutateSpace(id) { $0.icon = icon }
@@ -249,7 +375,7 @@ public final class BrowserStore {
             if !ephemeralSpaces.contains(spaceID) {
                 archive.append(ArchivedTab(id: id, url: tab.url, title: tab.displayTitle, spaceID: spaceID, archived: now))
             }
-            mutateSpace(spaceID) { $0.remove(id) }
+            mutateSpace(spaceID) { $0.remove(id); $0.removeFromSplits(id) }
             tabs[id] = nil
         }
         return victims
@@ -288,7 +414,7 @@ public final class BrowserStore {
             for id in ArchivePolicy.tabsToArchive(in: space, tabs: tabs, now: now) {
                 guard let tab = tabs[id] else { continue }
                 archive.append(ArchivedTab(id: id, url: tab.url, title: tab.displayTitle, spaceID: space.id, archived: now))
-                mutateSpace(space.id) { $0.remove(id) }
+                mutateSpace(space.id) { $0.remove(id); $0.removeFromSplits(id) }
                 tabs[id] = nil
                 archivedIDs.append(id)
             }

@@ -53,6 +53,17 @@ enum Menus {
         main.addItem(submenu("View", [
             item("Command Palette", #selector(AppDelegate.commandPalette), "k", target: target),
             item("Toggle Sidebar", #selector(AppDelegate.toggleSidebar), "s", target: target),
+            .separator(),
+            item("Add Split View", #selector(AppDelegate.addSplitView), "=", [.control, .shift], target: target),
+            item("Remove from Split View", #selector(AppDelegate.removeFromSplit), "-", [.control, .shift], target: target),
+            item("Separate Split View", #selector(AppDelegate.separateSplit), "", target: target),
+            item("Next Pane", #selector(AppDelegate.nextPane), "]", [.control, .shift], target: target),
+            item("Previous Pane", #selector(AppDelegate.previousPane), "[", [.control, .shift], target: target),
+            hidden(item("Pane 1", #selector(AppDelegate.focusPane(_:)), "1", [.control, .shift], target: target, tag: 0)),
+            hidden(item("Pane 2", #selector(AppDelegate.focusPane(_:)), "2", [.control, .shift], target: target, tag: 1)),
+            hidden(item("Pane 3", #selector(AppDelegate.focusPane(_:)), "3", [.control, .shift], target: target, tag: 2)),
+            hidden(item("Pane 4", #selector(AppDelegate.focusPane(_:)), "4", [.control, .shift], target: target, tag: 3)),
+            .separator(),
             item("Tabs on Top", #selector(AppDelegate.toggleTabsOnTop), "", target: target),
             item("Downloads and Media", #selector(AppDelegate.showLibrary), "j", [.command, .option], target: target),
             item("Reader", #selector(AppDelegate.toggleReader), "r", [.command, .shift], target: target),
@@ -133,10 +144,11 @@ enum Menus {
         return i
     }
 
-    private static func item(_ title: String, _ action: Selector, _ key: String, _ mods: NSEvent.ModifierFlags = [.command], target: AnyObject?) -> NSMenuItem {
+    private static func item(_ title: String, _ action: Selector, _ key: String, _ mods: NSEvent.ModifierFlags = [.command], target: AnyObject?, tag: Int = 0) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
         i.keyEquivalentModifierMask = mods
         i.target = target
+        i.tag = tag
         return i
     }
 }

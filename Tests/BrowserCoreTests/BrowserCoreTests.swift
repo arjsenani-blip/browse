@@ -290,3 +290,81 @@ import Testing
         #expect(s.spaces.first { $0.id == work.id }?.folders[0].tabs.isEmpty == true)
     }
 }
+
+@Suite @MainActor struct SplitViewTests {
+    func store(_ n: Int) -> (BrowserStore, [TabID]) {
+        let s = BrowserStore()
+        let ids = (0..<n).map { s.openTab(URL(string: "https://t\($0).com")) }
+        return (s, ids)
+    }
+
+    @Test func splitJoinAndCap() {
+        let (s, t) = store(6)
+        let g = s.split(t[0], with: t[1])
+        #expect(g != nil)
+        #expect(s.currentSpace.split(containing: t[1])?.tabs == [t[0], t[1]])
+        // Joining an existing split inserts after the anchor.
+        #expect(s.split(t[0], with: t[2]) == g)
+        #expect(s.currentSpace.splits[0].tabs == [t[0], t[2], t[1]])
+        s.split(t[1], with: t[3])
+        #expect(s.currentSpace.splits[0].tabs.count == 4)
+        // A fifth pane is refused and leaves the tab out of any split.
+        s.split(t[0], with: t[4])
+        #expect(s.currentSpace.splits[0].tabs.count == 4)
+        #expect(s.currentSpace.split(containing: t[4]) == nil)
+        #expect(s.split(t[0], with: t[0]) == nil)
+    }
+
+    @Test func dropOnLeftPutsTabFirst() {
+        let (s, t) = store(2)
+        s.split(t[0], with: t[1], at: 0)
+        #expect(s.currentSpace.splits[0].tabs == [t[1], t[0]])
+    }
+
+    @Test func movingTabBetweenSplits() {
+        let (s, t) = store(4)
+        s.split(t[0], with: t[1])
+        s.split(t[2], with: t[3])
+        // t[1] leaves the first split (dissolving it) and joins the second.
+        s.split(t[2], with: t[1])
+        #expect(s.currentSpace.splits.count == 1)
+        #expect(s.currentSpace.splits[0].tabs == [t[2], t[1], t[3]])
+    }
+
+    @Test func closingAndSeparating() {
+        let (s, t) = store(3)
+        s.split(t[0], with: t[1]); s.split(t[1], with: t[2])
+        s.updateSplit(s.currentSpace.splits[0].id) { $0.fractions = [0.5, 0.3, 0.2] }
+        s.close(t[1])
+        #expect(s.currentSpace.splits[0].tabs == [t[0], t[2]])
+        #expect(s.currentSpace.splits[0].sizes.count == 2)
+        #expect(abs(s.currentSpace.splits[0].sizes.reduce(0, +) - 1) < 0.0001)
+        s.close(t[2])
+        #expect(s.currentSpace.splits.isEmpty, "a one-tab split dissolves")
+        let (s2, u) = store(2)
+        let g = s2.split(u[0], with: u[1])!
+        s2.separate(g)
+        #expect(s2.currentSpace.splitList == nil)
+        #expect(s2.currentSpace.today.count == 2, "separating keeps the tabs")
+    }
+
+    @Test func refusesTabsFromDifferentSpaces() {
+        let s = BrowserStore()
+        let a = s.openTab(URL(string: "https://a.com"))
+        let other = s.addSpace(name: "Work", accentHue: 0.3, newProfile: false)
+        let b = s.openTab(URL(string: "https://b.com"), in: other.id)
+        #expect(s.split(a, with: b) == nil)
+    }
+
+    @Test func archivedTabsLeaveSplitsAndOldSessionsDecode() throws {
+        let (s, t) = store(2)
+        s.split(t[0], with: t[1])
+        _ = s.clearToday(in: s.currentSpaceID, keepSelected: false)
+        #expect(s.currentSpace.splits.isEmpty)
+        // Sessions written before split view have no splitList.
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(s.currentSpace)) as! [String: Any]
+        json.removeValue(forKey: "splitList")
+        let space = try JSONDecoder().decode(Space.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(space.splits.isEmpty)
+    }
+}

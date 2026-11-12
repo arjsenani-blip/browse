@@ -11,9 +11,15 @@ public struct SidebarState: Equatable {
         public var sleeping: Bool
         public var loading: Bool
         public var playing: Bool
-        public init(id: TabID, title: String, url: URL?, sleeping: Bool, loading: Bool, playing: Bool) {
+        /// Set on the row that stands for a split view: every pane's tab, in pane order
+        /// (the row's own `id` is the first). The other members get no row of their own.
+        public var split: [Row]?
+        public init(id: TabID, title: String, url: URL?, sleeping: Bool, loading: Bool, playing: Bool, split: [Row]? = nil) {
             self.id = id; self.title = title; self.url = url; self.sleeping = sleeping; self.loading = loading; self.playing = playing
+            self.split = split
         }
+        /// Every tab this row shows.
+        public var members: [TabID] { split?.map(\.id) ?? [id] }
     }
 
     public struct Page: Equatable {
@@ -137,6 +143,15 @@ public protocol SidebarDelegate: AnyObject {
     /// Live position between two spaces (0 = `from`, 1 = `to`) for the background cross-fade;
     /// a negative fraction means "animate from `from` to `to`" (keyboard or dot switch).
     func sidebarSwipeProgress(from: Int, to: Int, fraction: Double)
+    /// ⌥-click: open this tab in a split with the one on screen.
+    func sidebarOpenInSplit(_ id: TabID)
+    /// A tab drag from the sidebar started / ended (`screenPoint`, and whether anything took it).
+    func sidebarTabDragBegan(_ id: TabID)
+    func sidebarTabDragEnded(_ id: TabID, at screenPoint: NSPoint, accepted: Bool)
+    /// The unsplit button on a split row's hover (or ⌥-click on the row).
+    func sidebarSeparateSplit(_ id: TabID)
+    /// The button beside the traffic lights.
+    func sidebarToggleSidebar()
 }
 
 /// The vertical sidebar: fixed navigation and address pill on top, a strip of
@@ -150,6 +165,11 @@ public final class SidebarViewController: NSViewController {
     private let backButton = SidebarViewController.iconButton("chevron.left", "Back")
     private let forwardButton = SidebarViewController.iconButton("chevron.right", "Forward")
     private let reloadButton = SidebarViewController.iconButton("arrow.clockwise", "Reload")
+    private let sidebarButton = SidebarViewController.iconButton("sidebar.left", "Hide Sidebar (⌘S)")
+    /// The floating copy shown while peeking at a hidden sidebar: its button docks it again.
+    public var isPeek = false {
+        didSet { sidebarButton.toolTip = isPeek ? "Keep Sidebar Open (⌘S)" : "Hide Sidebar (⌘S)" }
+    }
     private let urlPill = URLPill()
     private let pager = PagerClipView()
     private let strip = NSView()
@@ -174,6 +194,8 @@ public final class SidebarViewController: NSViewController {
         backButton.target = self; backButton.action = #selector(back)
         forwardButton.target = self; forwardButton.action = #selector(forward)
         reloadButton.target = self; reloadButton.action = #selector(reload)
+        sidebarButton.target = self; sidebarButton.action = #selector(toggleSidebarClicked)
+        sidebarButton.setAccessibilityLabel("Hide or show the sidebar")
         urlPill.onClick = { [weak self] in self?.delegate?.sidebarOpenPalette() }
 
         pager.wantsLayer = true
@@ -235,7 +257,7 @@ public final class SidebarViewController: NSViewController {
         nowPlayingView.onOpen = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarSelect(id) } }
         nowPlayingView.isHidden = true
 
-        for v in [nav, urlPill, pager, nowPlayingView, footer] as [NSView] {
+        for v in [nav, sidebarButton, urlPill, pager, nowPlayingView, footer] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             host.addSubview(v)
         }
@@ -246,6 +268,9 @@ public final class SidebarViewController: NSViewController {
         NSLayoutConstraint.activate([
             nav.topAnchor.constraint(equalTo: host.topAnchor, constant: 11),
             nav.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -pad - 4),
+            // Right after the traffic lights (they end near x = 74), on their centre line.
+            sidebarButton.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 82),
+            sidebarButton.centerYAnchor.constraint(equalTo: nav.centerYAnchor),
             urlPill.topAnchor.constraint(equalTo: host.topAnchor, constant: 44),
             urlPill.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: pad),
             urlPill.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -pad),
@@ -597,6 +622,7 @@ public final class SidebarViewController: NSViewController {
     @objc private func back() { delegate?.sidebarBack() }
     @objc private func forward() { delegate?.sidebarForward() }
     @objc private func reload() { delegate?.sidebarReload() }
+    @objc private func toggleSidebarClicked() { delegate?.sidebarToggleSidebar() }
     @objc private func newTabClicked() { delegate?.sidebarNewTab() }
 
     /// The footer "+" opens a small "New…" menu (Arc-style) above the button.
@@ -689,7 +715,7 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.menuProvider = { [weak self] row in
             guard let self, row >= 0, row < self.rows.count else { return nil }
             switch self.rows[row] {
-            case .tab(let r, _), .child(let r, _): return self.delegate?.sidebarContextMenu(for: r.id)
+            case .tab(let r, _), .child(let r, _): return self.delegate?.sidebarContextMenu(for: self.tabID(in: r, row: row))
             case .folder(let f): return self.delegate?.sidebarFolderMenu(f.id)
             default: return nil
             }
@@ -811,7 +837,12 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let row = table.clickedRow
         guard row >= 0, row < rows.count else { return }
         switch rows[row] {
-        case .tab(let r, _), .child(let r, _): delegate?.sidebarSelect(r.id)
+        case .tab(let r, _), .child(let r, _):
+            let id = tabID(in: r, row: row)
+            if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
+                if r.split != nil { delegate?.sidebarSeparateSplit(id) } else { delegate?.sidebarOpenInSplit(id) }
+            }
+            else { delegate?.sidebarSelect(id) }
         case .folder(let f): delegate?.sidebarToggleFolder(f.id)
         case .newTab: delegate?.sidebarNewTab()
         case .divider: break
@@ -839,13 +870,15 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             return v
         case .tab(let r, _):
             let v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
-            v.configure(r, selected: r.id == page.selected, style: style)
+            v.configure(r, selected: r.members.contains { $0 == page.selected }, style: style, focused: page.selected)
             v.onClose = { [weak self] in self?.delegate?.sidebarClose(r.id) }
+            v.onSeparate = r.split == nil ? nil : { [weak self] in self?.delegate?.sidebarSeparateSplit(r.id) }
             return v
         case .child(let r, _):
             let v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
-            v.configure(r, selected: r.id == page.selected, style: style, indent: 14)
+            v.configure(r, selected: r.members.contains { $0 == page.selected }, style: style, indent: 14, focused: page.selected)
             v.onClose = { [weak self] in self?.delegate?.sidebarClose(r.id) }
+            v.onSeparate = r.split == nil ? nil : { [weak self] in self?.delegate?.sidebarSeparateSplit(r.id) }
             return v
         case .folder(let f):
             let v = tableView.makeView(withIdentifier: FolderCell.id, owner: nil) as? FolderCell ?? FolderCell()
@@ -857,16 +890,40 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
 
+    /// For a split row, the segment under the pointer; otherwise the row's tab.
+    private func tabID(in r: SidebarState.Row, row: Int) -> TabID {
+        guard r.split != nil, let event = NSApp.currentEvent,
+              let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? TabCell else { return r.id }
+        return cell.segment(at: cell.convert(event.locationInWindow, from: nil)) ?? r.id
+    }
+
+    private var draggedTab: TabID?
+
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
         let r: SidebarState.Row
         switch rows[row] {
         case .tab(let x, _), .child(let x, _): r = x
         default: return nil
         }
+        let id = tabID(in: r, row: row)
+        let url = r.split?.first { $0.id == id }?.url ?? r.url
         let item = NSPasteboardItem()
-        item.setString(r.id.description, forType: .aegisTab)
-        if let url = r.url { item.setString(url.absoluteString, forType: .string) }
+        item.setString(id.description, forType: .aegisTab)
+        if let url { item.setString(url.absoluteString, forType: .string) }
+        draggedTab = id
         return item
+    }
+
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
+        // A drop outside the window tears the tab off: don't fly the image back first.
+        session.animatesToStartingPositionsOnCancelOrFail = false
+        if let id = draggedTab { delegate?.sidebarTabDragBegan(id) }
+    }
+
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        guard let id = draggedTab else { return }
+        draggedTab = nil
+        delegate?.sidebarTabDragEnded(id, at: screenPoint, accepted: !operation.isEmpty)
     }
 
     func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int, proposedDropOperation op: NSTableView.DropOperation) -> NSDragOperation {
@@ -928,10 +985,18 @@ final class TabCell: NSTableCellView {
     private var selected = false
     private var style = SidebarStyle()
     var onClose: (() -> Void)?
+    /// Split view: one segment per pane instead of the icon and title.
+    private let segments = NSStackView()
+    private var segmentViews: [SplitSegmentView] = []
+    private var isSplitRow = false
 
     init() {
         super.init(frame: .zero)
         identifier = TabCell.id
+        segments.orientation = .horizontal
+        segments.distribution = .fillEqually
+        segments.spacing = 2
+        segments.isHidden = true
         background.wantsLayer = true
         background.layer?.cornerRadius = Tokens.Radius.tabRow
         background.layer?.cornerCurve = .continuous
@@ -948,10 +1013,16 @@ final class TabCell: NSTableCellView {
         closeButton.target = self
         closeButton.action = #selector(closeClicked)
         closeButton.isHidden = true
-        for v in [background, icon, label, audio, closeButton] {
+        for v in [background, icon, label, audio, closeButton, segments] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
+        NSLayoutConstraint.activate([
+            segments.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 3),
+            segments.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -2),
+            segments.topAnchor.constraint(equalTo: topAnchor, constant: 3),
+            segments.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
+        ])
         NSLayoutConstraint.activate([
             background.leadingAnchor.constraint(equalTo: leadingAnchor),
             background.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -978,8 +1049,9 @@ final class TabCell: NSTableCellView {
 
     private var iconLeading: NSLayoutConstraint?
 
-    func configure(_ row: SidebarState.Row, selected: Bool, style: SidebarStyle, indent: CGFloat = 0) {
+    func configure(_ row: SidebarState.Row, selected: Bool, style: SidebarStyle, indent: CGFloat = 0, focused: TabID? = nil) {
         iconLeading?.constant = 10 + indent
+        configureSplit(row, selected: selected, style: style, focused: focused)
         self.selected = selected
         self.style = style
         label.stringValue = row.title
@@ -1003,6 +1075,40 @@ final class TabCell: NSTableCellView {
             }
         }
         closeButton.isHidden = true
+        closeButton.image = NSImage(systemSymbolName: isSplitRow ? "rectangle.split.2x1" : "xmark",
+                                    accessibilityDescription: isSplitRow ? "Separate Split View" : "Close Tab")
+        closeButton.toolTip = isSplitRow ? "Separate Split View" : nil
+        if isSplitRow {
+            let titles = row.split?.map(\.title).joined(separator: " | ") ?? row.title
+            toolTip = "Split View: \(titles)"
+            setAccessibilityLabel("Split View: \(titles)")
+            alphaValue = 1
+        }
+    }
+
+    private func configureSplit(_ row: SidebarState.Row, selected: Bool, style: SidebarStyle, focused: TabID?) {
+        let peers = row.split ?? []
+        isSplitRow = !peers.isEmpty
+        segments.isHidden = !isSplitRow
+        icon.isHidden = isSplitRow
+        label.isHidden = isSplitRow
+        guard isSplitRow else { return }
+        while segmentViews.count < peers.count {
+            let v = SplitSegmentView()
+            segmentViews.append(v)
+            segments.addArrangedSubview(v)
+        }
+        while segmentViews.count > peers.count { segmentViews.removeLast().removeFromSuperview() }
+        let focusedIndex = selected ? peers.firstIndex { $0.id == focused } : nil
+        for (i, (v, peer)) in zip(segmentViews, peers).enumerated() {
+            v.configure(peer, focused: i == focusedIndex, style: style)
+        }
+    }
+
+    /// The pane's tab under `point` (in this cell), for split rows.
+    func segment(at point: NSPoint) -> TabID? {
+        guard isSplitRow else { return nil }
+        return segmentViews.first { $0.frame.insetBy(dx: -1, dy: -3).contains(segments.convert(point, from: self)) }?.tabID
     }
 
     /// Dark favicons (GitHub, X…) vanish on dark themes: give them a light plate.
@@ -1017,6 +1123,7 @@ final class TabCell: NSTableCellView {
 
     func configureNewTab(style: SidebarStyle) {
         iconLeading?.constant = 10
+        isSplitRow = false; segments.isHidden = true; icon.isHidden = false; label.isHidden = false
         selected = false
         self.style = style
         label.stringValue = "New Tab"
@@ -1043,7 +1150,7 @@ final class TabCell: NSTableCellView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        closeButton.isHidden = onClose == nil
+        closeButton.isHidden = (isSplitRow ? onSeparate : onClose) == nil
         if !selected { background.layer?.backgroundColor = style.quietFill.withAlphaComponent(style.onDark ? 0.06 : 0.22).cgColor }
     }
     override func mouseExited(with event: NSEvent) {
@@ -1051,7 +1158,8 @@ final class TabCell: NSTableCellView {
         if !selected { background.layer?.backgroundColor = NSColor.clear.cgColor }
     }
     override func otherMouseUp(with event: NSEvent) { if event.buttonNumber == 2 { onClose?() } }
-    @objc private func closeClicked() { onClose?() }
+    var onSeparate: (() -> Void)?
+    @objc private func closeClicked() { if isSplitRow { onSeparate?() } else { onClose?() } }
 }
 
 /// A folder row: folder glyph (filled when open) and its name, editable in place.
@@ -1487,6 +1595,57 @@ enum Artwork {
             let image = data.flatMap { NSImage(data: $0) }
             if let image { cache[url] = image; if cache.count > 32 { cache.removeAll() } }
             completion(image)
+        }
+    }
+}
+
+
+/// One pane of a split row: favicon and title; the focused pane's segment is lifted.
+final class SplitSegmentView: NSView {
+    private let icon = NSImageView()
+    private let label = NSTextField(labelWithString: "")
+    private(set) var tabID: TabID?
+    private var url: URL?
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = Tokens.Radius.tabRow - 3
+        layer?.cornerCurve = .continuous
+        label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        for v in [icon, label] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: Tokens.Size.favicon),
+            icon.heightAnchor.constraint(equalToConstant: Tokens.Size.favicon),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ row: SidebarState.Row, focused: Bool, style: SidebarStyle) {
+        tabID = row.id
+        label.stringValue = row.title
+        label.font = .systemFont(ofSize: style.fontSize - 0.5, weight: focused ? .medium : .regular)
+        label.textColor = .labelColor
+        layer?.backgroundColor = focused ? NSColor.white.withAlphaComponent(style.onDark ? 0.16 : 0.85).cgColor : NSColor.clear.cgColor
+        layer?.shadowOpacity = focused && !style.onDark ? 0.10 : 0
+        layer?.shadowRadius = 1.5
+        layer?.shadowOffset = CGSize(width: 0, height: -0.5)
+        alphaValue = row.sleeping && !focused ? 0.7 : 1
+        url = row.url
+        icon.image = Favicons.shared.cached(for: row.url) ?? Favicons.placeholder()
+        if Favicons.shared.cached(for: row.url) == nil {
+            let u = row.url
+            Favicons.shared.load(for: u) { [weak self] image in
+                guard let self, self.url == u, let image else { return }
+                self.icon.image = image
+            }
         }
     }
 }

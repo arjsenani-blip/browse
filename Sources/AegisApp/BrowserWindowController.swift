@@ -15,6 +15,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private let split = NSSplitViewController()
     private let sidebar = SidebarViewController()
     private let card = ContentCard()
+    /// One card per visible tab: just `card` normally, two to four in a split.
+    private lazy var panes = PaneStack(primary: card)
+    /// The card showing the selected tab (progress, reader, find bar, wake snapshot).
+    private var focusCard: ContentCard { panes.focused }
+    /// The last pane layout applied, so a refresh only re-arranges on a real change.
+    private var lastArrangement: (keys: [TabID], sizes: [Double], vertical: Bool, focus: Int)?
+    /// After "Add Split View": the next tab opened from the palette joins this tab's split.
+    private var pendingSplitWith: TabID?
+    /// Hover-to-peek at a hidden sidebar.
+    private lazy var peek = SidebarPeek(controller: self)
+    let peekSidebar = SidebarViewController()
     private let palette = PaletteController()
     private let library = LibraryController()
     private lazy var reader = ReaderView()
@@ -47,6 +58,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     /// The key window follows store changes to the current space; others keep theirs.
     private func syncSpace() {
+        defer {
+            if window?.isKeyWindow ?? true { windowSelection = windowSpace.selected }
+        }
         let visible = visibleSpaces
         if window?.isKeyWindow ?? true, visible.contains(where: { $0.id == store.currentSpaceID }) {
             spaceID = store.currentSpaceID
@@ -58,6 +72,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             if window?.isKeyWindow == true, let spaceID { store.currentSpaceID = spaceID }
         }
     }
+
+    /// The tab this window shows in its space. Two windows on one space each keep their own;
+    /// the space's `selected` (what commands act on) follows the key window, like `spaceID`.
+    private var windowSelection: TabID?
+    var shownSelection: TabID? {
+        let space = windowSpace
+        if let w = windowSelection, space.allTabs.contains(w) { return w }
+        return space.selected
+    }
+    /// Tabs on screen in this window (the selected tab, or every pane of its split).
+    private(set) var visibleTabs: [TabID] = []
 
     private func setWindowSpace(_ id: UUID) {
         spaceID = id
@@ -111,24 +136,24 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
         let contentVC = NSViewController()
         let container = NSView()
-        card.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(card)
+        panes.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(panes)
         topBar.translatesAutoresizingMaskIntoConstraints = false
         topBar.delegate = self
         container.addSubview(topBar)
         let inset = Tokens.Space.cardInset
-        cardTrailing = card.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -inset)
-        cardBottom = card.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -inset)
+        cardTrailing = panes.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -inset)
+        cardBottom = panes.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -inset)
         NSLayoutConstraint.activate([
-            card.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 0),
+            panes.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 0),
             cardTrailing, cardBottom,
             topBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             topBar.topAnchor.constraint(equalTo: container.topAnchor),
             topBar.heightAnchor.constraint(equalToConstant: 40),
         ])
-        cardTopToContainer = card.topAnchor.constraint(equalTo: container.topAnchor, constant: inset)
-        cardTopToBar = card.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 0)
+        cardTopToContainer = panes.topAnchor.constraint(equalTo: container.topAnchor, constant: inset)
+        cardTopToBar = panes.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 0)
         contentVC.view = container
         let contentItem = NSSplitViewItem(viewController: contentVC)
         contentItem.minimumThickness = 400
@@ -172,6 +197,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
         split.splitView.dividerStyle = .thin
         applyTheme(animated: false)
+        wirePanes()
+        peekSidebar.delegate = self
+        peekSidebar.isPeek = true
+        if UserDefaults.standard.bool(forKey: "sidebarHidden") && !tabsOnTop { setSidebarHidden(true, animated: false) }
         observeStore()
         app.extensions.didOpen(window: extensionWindow)
         applyTabLayout(animated: false)
@@ -186,9 +215,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         topBar.isHidden = !top
         if animated { sideItem.animator().isCollapsed = top } else { sideItem.isCollapsed = top }
         // Inset the card on the left too when there's no sidebar beside it.
-        card.superview.flatMap { container in
-            container.constraints.first { $0.firstItem === card && $0.firstAttribute == .leading }
-        }?.constant = top ? CGFloat(app.appearance.cardInset) : 0
+        updateCardLeading()
         refresh()
     }
 
@@ -199,12 +226,22 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         cardTrailing?.constant = -inset
         cardBottom?.constant = -inset
         cardTopToContainer?.constant = inset
-        card.setCornerRadius(CGFloat(a.cornerRadius))
+        panes.cornerRadius = CGFloat(a.cornerRadius)
+        panes.gap = max(6, inset)
+        updateCardLeading()
         background.enabled = a.tintWindow
         refresh()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Inset the card on the left too when there's no sidebar beside it (tabs on top, or hidden).
+    private func updateCardLeading() {
+        let alone = tabsOnTop || sidebarHidden
+        panes.superview.flatMap { container in
+            container.constraints.first { $0.firstItem === panes && $0.firstAttribute == .leading }
+        }?.constant = alone ? CGFloat(app.appearance.cardInset) : 0
+    }
 
     // MARK: Store → UI
 
@@ -244,7 +281,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         syncSpace()
         let space = windowSpace
         let visible = visibleSpaces
-        let live = space.selected.flatMap { runtime.tab($0) }
+        let live = shownSelection.flatMap { runtime.tab($0) }
         var s = SidebarState()
         s.blockerOn = app.privacy.blockContent
         func row(_ id: TabID) -> SidebarState.Row? {
@@ -260,21 +297,34 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 loading: w?.isLoading ?? false,
                 playing: t.activity.contains(.playingMedia))
         }
-        s.pages = visible.map { sp in
+        var builtPages: [SidebarState.Page] = []
+        for sp in visible {
+            // A split shows as one row, where its first member (in sidebar order) sits.
+            var shown = Set<TabID>()
+            func entry(_ id: TabID) -> SidebarState.Row? {
+                guard let g = sp.split(containing: id) else { return row(id) }
+                guard !g.tabs.contains(where: shown.contains) else { return nil }
+                g.tabs.forEach { shown.insert($0) }
+                let members = g.tabs.compactMap(row)
+                guard var first = members.first else { return nil }
+                first.split = members.count > 1 ? members : nil
+                return first
+            }
             var page = SidebarState.Page(id: sp.id, name: sp.name, theme: sp.resolvedTheme)
             page.icon = sp.icon ?? (isPrivateWindow ? "eye.slash" : Space.icons[(visible.firstIndex { $0.id == sp.id } ?? 0) % Space.icons.count])
             page.favorites = sp.favorites.compactMap(row)
             page.pinned = sp.pinned.compactMap(row)
-            page.pinnedEntries = sp.pinnedEntries.compactMap { entry -> PinnedItem? in
-                switch entry {
-                case .tab(let id): return row(id).map { .tab($0) }
-                case .folder(let f): return .folder(FolderRow(id: f.id, name: f.name, icon: f.icon, expanded: f.isExpanded, children: f.tabs.compactMap(row)))
+            page.pinnedEntries = sp.pinnedEntries.compactMap { item -> PinnedItem? in
+                switch item {
+                case .tab(let id): return entry(id).map { .tab($0) }
+                case .folder(let f): return .folder(FolderRow(id: f.id, name: f.name, icon: f.icon, expanded: f.isExpanded, children: f.tabs.compactMap(entry)))
                 }
             }
-            page.today = sp.today.compactMap(row)
-            page.selected = sp.selected
-            return page
+            page.today = sp.today.compactMap(entry)
+            page.selected = sp.id == space.id ? shownSelection : sp.selected
+            builtPages.append(page)
         }
+        s.pages = builtPages
         s.currentIndex = visible.firstIndex { $0.id == space.id } ?? 0
         s.activeDownloads = DownloadCenter.shared.active.count
         s.nowPlaying = nowPlaying()
@@ -292,26 +342,28 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         s.style = style
 
         if let live {
-            s.host = live.url?.host() ?? space.selected.flatMap { store.tabs[$0]?.url?.host() } ?? ""
+            s.host = live.url?.host() ?? shownSelection.flatMap { store.tabs[$0]?.url?.host() } ?? ""
             // Secure only for a real HTTPS page with no mixed content: the
             // HTTPS-only interstitial and http pages show the warning shield.
             s.isSecure = live.url?.scheme == "https" && live.isSecure
             s.canGoBack = live.canGoBack
             s.canGoForward = live.canGoForward
             s.isLoading = live.isLoading
-            card.setProgress(live.progress, loading: live.isLoading, hue: space.accentHue)
-            if !live.isLoading && live.progress >= 1 { card.dismissSnapshot() }
+            focusCard.setProgress(live.progress, loading: live.isLoading, hue: space.accentHue)
+            if !live.isLoading && live.progress >= 1 { focusCard.dismissSnapshot() }
+            panes.accentHue = space.accentHue
         }
         background.set(themes: visible.map(\.resolvedTheme), current: s.currentIndex, keepingAnimation: true)
         topBar.appearance = sidebar.view.appearance
         sidebar.apply(s)
+        if peek.isShown { peekSidebar.apply(s) }
         if tabsOnTop { topBar.apply(s) }
         showSelected()
         if space.id != lastSpaceID {
             lastSpaceID = space.id
             warmNeighbourSpaces()
         }
-        window?.title = space.selected.flatMap { store.tabs[$0]?.displayTitle } ?? (isPrivateWindow ? "Private" : "Aegis")
+        window?.title = shownSelection.flatMap { store.tabs[$0]?.displayTitle } ?? (isPrivateWindow ? "Private" : "Aegis")
     }
 
     /// After a space switch settles, quietly wake the neighbouring spaces'
@@ -353,25 +405,101 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                           artist: t.mediaArtist ?? "", artwork: t.mediaArtwork)
     }
 
-    var debugSnapshotCovering: Bool { card.isSnapshotCovering }
+    var debugSnapshotCovering: Bool { focusCard.isSnapshotCovering }
 
     private func showSelected() {
-        guard let id = windowSpace.selected, store.tabs[id] != nil else {
+        guard let id = shownSelection, store.tabs[id] != nil else {
+            arrangePanes([], sizes: [], vertical: false, focus: 0)
             card.show(nil)
             shownTab = nil
-            runtime.foreground = []
+            visibleTabs = []
+            app.updateForeground()
             return
         }
         if readerFor == id { return }
-        let wasSleeping = store.tabs[id]?.isSleeping ?? false
-        let snapshot = wasSleeping ? runtime.tab(id)?.snapshot : nil
-        guard let view = runtime.show(id) else { return }
-        if shownTab != id || card.current !== view {
-            let spaceChanged = shownTab.map { store.space(containing: $0)?.id != spaceID } ?? false
-            card.show(view, snapshot: snapshot, crossfade: spaceChanged)
+        let group = windowSpace.split(containing: id)
+        let tabs = group?.tabs.filter { store.tabs[$0] != nil } ?? [id]
+        let focus = tabs.firstIndex(of: id) ?? 0
+        let spaceChanged = shownTab.map { store.space(containing: $0)?.id != spaceID } ?? false
+        arrangePanes(tabs, sizes: group?.sizes ?? [1], vertical: group?.vertical ?? false, focus: focus)
+        for t in tabs {
+            let wasSleeping = store.tabs[t]?.isSleeping ?? false
+            let snapshot = wasSleeping ? runtime.tab(t)?.snapshot : nil
+            guard let view = runtime.show(t), let c = panes.card(for: t), c.current !== view else { continue }
+            c.show(view, snapshot: snapshot, crossfade: spaceChanged)
+        }
+        if shownTab != id {
             shownTab = id
-            runtime.foreground = [id]
             if findBar != nil { closeFind() }
+        }
+        if visibleTabs != tabs {
+            visibleTabs = tabs
+            app.updateForeground()
+        }
+        // Keyboard focus follows the focused pane.
+        if tabs.count > 1, let view = runtime.existingTab(id)?.webView, window?.firstResponder !== view,
+           let responder = window?.firstResponder as? NSView, panes.cards.contains(where: { responder.isDescendant(of: $0) }) {
+            window?.makeFirstResponder(view)
+        }
+    }
+
+    private func arrangePanes(_ tabs: [TabID], sizes: [Double], vertical: Bool, focus: Int) {
+        let keys = tabs.isEmpty ? [] : tabs
+        if let last = lastArrangement, last.keys == keys, last.sizes == sizes, last.vertical == vertical {
+            if last.focus != focus { panes.setFocused(focus); lastArrangement?.focus = focus }
+            return
+        }
+        lastArrangement = (keys, sizes, vertical, focus)
+        guard !keys.isEmpty else { return }
+        panes.arrange(keys: keys.map(AnyHashable.init), sizes: sizes, vertical: vertical, focused: focus, animated: true)
+    }
+
+    private func wirePanes() {
+        panes.onFocus = { [weak self] i in
+            guard let self, let tabs = self.lastArrangement?.keys, tabs.indices.contains(i) else { return }
+            self.select(tabs[i])
+        }
+        panes.onUnsplitPane = { [weak self] i in
+            guard let self, let tabs = self.lastArrangement?.keys, tabs.indices.contains(i) else { return }
+            let removed = tabs[i]
+            self.store.removeFromSplit(removed)
+            // Stay on a pane that's still visible.
+            if self.shownSelection == removed, let keep = tabs.first(where: { $0 != removed }) { self.select(keep) }
+        }
+        panes.onResize = { [weak self] sizes in
+            guard let self, let id = self.shownSelection, let g = self.windowSpace.split(containing: id) else { return }
+            self.lastArrangement?.sizes = sizes
+            self.store.updateSplit(g.id) { $0.fractions = SplitGroup.normalized(sizes) }
+        }
+        panes.canDropTab = { [weak self] raw, i, _ in
+            guard let self, let dropped = UUID(uuidString: raw).map(TabID.init), let tabs = self.lastArrangement?.keys,
+                  tabs.indices.contains(i), self.windowSpace.allTabs.contains(dropped) else { return false }
+            if tabs.contains(dropped) { return tabs.count > 1 && tabs[i] != dropped }  // reorder within the split
+            return tabs.count < SplitGroup.maxPanes
+        }
+        panes.onDropTab = { [weak self] raw, i, edge in
+            guard let self, let dropped = UUID(uuidString: raw).map(TabID.init), let tabs = self.lastArrangement?.keys,
+                  tabs.indices.contains(i) else { return }
+            let target = tabs[i]
+            let before = edge == .leading || edge == .top
+            if let g = self.windowSpace.split(containing: target), g.tabs.contains(dropped) {
+                // Reorder inside the split.
+                self.store.updateSplit(g.id) { group in
+                    group.tabs.removeAll { $0 == dropped }
+                    let at = group.tabs.firstIndex(of: target).map { before ? $0 : $0 + 1 } ?? group.tabs.count
+                    group.tabs.insert(dropped, at: at)
+                    group.fractions = nil
+                }
+            } else {
+                let index: Int? = self.windowSpace.split(containing: target) == nil
+                    ? (before ? 0 : nil)
+                    : (self.windowSpace.split(containing: target)!.tabs.firstIndex(of: target).map { before ? $0 : $0 + 1 })
+                if let gid = self.store.split(target, with: dropped, at: index),
+                   self.windowSpace.split(containing: target)?.tabs.count == 2 {
+                    self.store.updateSplit(gid) { $0.vertical = edge == .top || edge == .bottom }
+                }
+            }
+            self.select(dropped)
         }
     }
 
@@ -388,8 +516,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let remote = SearchEngine.suggestionsEnabled && engine.suggestTemplate != nil
             && !isPrivateWindow && !app.privateProfiles.contains(store.currentSpace.profileID)
         palette.model.footnote = remote ? "Suggestions from \(engine.name)" : "Results stay on this Mac"
-        card.setEmptyStateHidden(true)
-        palette.onClose = { [weak self] in self?.card.setEmptyStateHidden(false) }
+        focusCard.setEmptyStateHidden(true)
+        palette.onClose = { [weak self] in
+            self?.focusCard.setEmptyStateHidden(false)
+            self?.pendingSplitWith = nil
+        }
         palette.show(in: window, over: card, dataSource: source, initialText: initial, hue: windowSpace.accentHue)
     }
 
@@ -397,10 +528,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     var debugSidebar: SidebarViewController { sidebar }
 
     func navigate(to url: URL, newTab: Bool, background: Bool = false, typed: Bool = true) {
+        let splitAnchor = pendingSplitWith   // dismissing the palette clears it
         if palette.isOpen { palette.dismiss() }
         if newTab || store.selectedTab == nil {
             let id = store.openTab(url, select: !background)
             if !background { runtime.tab(id)?.load(url, typed: typed) }
+            if let anchor = splitAnchor, newTab {
+                pendingSplitWith = nil
+                store.split(anchor, with: id)
+            }
         } else if let id = store.selectedTab?.id {
             exitReader()
             runtime.show(id)
@@ -413,6 +549,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         exitReader()
         let previous = store.currentSpace.selected.flatMap { runtime.tab($0) }
         store.select(id)
+        windowSelection = id
         if let tab = runtime.tab(id) {
             app.extensions.didActivate(tab: app.extensionTab(tab), previous: previous.map(app.extensionTab))
         }
@@ -468,14 +605,95 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         Toast.show("Copied link", in: window)
     }
 
+    /// Hidden with ⌘S or the button by the traffic lights: the page goes edge to edge, the
+    /// lights hide, and the left edge peeks the sidebar in over the page.
+    private(set) var sidebarHidden = false
+
     func toggleSidebar() {
         if tabsOnTop { return }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = Tokens.Motion.duration(Tokens.Motion.sidebarToggle)
-            ctx.allowsImplicitAnimation = true
-            sideItem.animator().isCollapsed.toggle()
+        if peek.isShown { peek.hide(animated: false); setSidebarHidden(false, animated: true); return }
+        setSidebarHidden(!sidebarHidden, animated: true)
+    }
+
+    func setSidebarHidden(_ hidden: Bool, animated: Bool) {
+        sidebarHidden = hidden
+        UserDefaults.standard.set(hidden, forKey: "sidebarHidden")
+        setTrafficLightsHidden(hidden)
+        let apply = { [self] in
+            if animated { sideItem.animator().isCollapsed = hidden } else { sideItem.isCollapsed = hidden }
+            updateCardLeading()
+        }
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = Tokens.Motion.duration(Tokens.Motion.sidebarToggle)
+                ctx.allowsImplicitAnimation = true
+                apply()
+                window?.contentView?.layoutSubtreeIfNeeded()
+            }
+        } else {
+            apply()
+        }
+        peek.setEnabled(hidden)
+    }
+
+    func setTrafficLightsHidden(_ hidden: Bool) {
+        for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window?.standardWindowButton(b)?.isHidden = hidden
         }
     }
+
+    // MARK: Split view
+
+    /// ⌃⇧=: a new pane beside the focused one; what you open from the palette fills it.
+    func addSplitView() {
+        guard let id = shownSelection else { openPalette(.newTab); return }
+        if let g = windowSpace.split(containing: id), g.tabs.count >= SplitGroup.maxPanes {
+            Toast.show("Split view holds up to \(SplitGroup.maxPanes) tabs", in: window)
+            return
+        }
+        pendingSplitWith = id
+        openPalette(.newTab)
+    }
+
+    /// Splits `id` with the tab on screen (or adds it to that split).
+    func openInSplit(_ id: TabID) {
+        guard let current = shownSelection, current != id else { return }
+        if let g = windowSpace.split(containing: current), g.tabs.count >= SplitGroup.maxPanes, !g.tabs.contains(id) {
+            Toast.show("Split view holds up to \(SplitGroup.maxPanes) tabs", in: window)
+            return
+        }
+        store.split(current, with: id)
+        select(id)
+    }
+
+    /// ⌃⇧−: the focused tab leaves its split (it stays open, on its own).
+    func removeFromSplit() {
+        guard let id = shownSelection, windowSpace.split(containing: id) != nil else { return }
+        store.removeFromSplit(id)
+    }
+
+    func separateSplit() {
+        guard let id = shownSelection, let g = windowSpace.split(containing: id) else { return }
+        store.separate(g.id)
+    }
+
+    /// ⌃⇧] / ⌃⇧[ move focus between panes; ⌃⇧1…4 jump to one.
+    func focusPane(by delta: Int) {
+        guard let id = shownSelection, let g = windowSpace.split(containing: id), let i = g.tabs.firstIndex(of: id) else { return }
+        select(g.tabs[(i + delta + g.tabs.count) % g.tabs.count])
+    }
+
+    func focusPane(at index: Int) {
+        guard let id = shownSelection, let g = windowSpace.split(containing: id), g.tabs.indices.contains(index) else { return }
+        select(g.tabs[index])
+    }
+
+    func debugShowPeek() { peek.show() }
+    var debugPanes: String {
+        panes.cards.map { c in "\((c.current as? WKWebView)?.url?.host() ?? "none")@\(Int(c.frame.minX))w\(Int(c.frame.width))" }.joined(separator: " | ")
+    }
+
+    var isInSplit: Bool { shownSelection.map { windowSpace.split(containing: $0) != nil } ?? false }
 
     func toggleReader() {
         guard let id = store.selectedTab?.id, let tab = runtime.tab(id) else { return }
@@ -487,18 +705,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 return
             }
             // The user may have switched tabs (or closed this one) while extracting.
-            guard windowSpace.selected == id, store.tabs[id] != nil else { return }
+            guard shownSelection == id, store.tabs[id] != nil else { return }
             reader.onOpenLink = { [weak self] url in self?.navigate(to: url, newTab: false) }
             reader.show(title: article.title, byline: article.byline, site: article.site, html: article.html)
             readerFor = id
-            card.show(reader)
+            focusCard.show(reader)
         }
     }
 
     /// ⌘+ / ⌘- / ⌘0 size the reader's text while it's showing (the page
     /// behind it isn't visible). False when the reader isn't up.
     func readerZoom(_ step: CGFloat?) -> Bool {
-        guard readerFor != nil, readerFor == windowSpace.selected else { return false }
+        guard readerFor != nil, readerFor == shownSelection else { return false }
         if let step { reader.fontSize += step } else { reader.fontSize = 20 }
         return true
     }
@@ -552,10 +770,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let bar = FindBar(webView: webView)
         bar.onClose = { [weak self] in self?.closeFind() }
         bar.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(bar)
+        focusCard.addSubview(bar)
         NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
-            bar.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
+            bar.topAnchor.constraint(equalTo: focusCard.topAnchor, constant: 10),
+            bar.trailingAnchor.constraint(equalTo: focusCard.trailingAnchor, constant: -12),
         ])
         findBar = bar
         bar.focus()
@@ -583,13 +801,45 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         if let spaceID, store.spaces.contains(where: { $0.id == spaceID }), store.currentSpaceID != spaceID {
             store.currentSpaceID = spaceID
         }
-        if let id = windowSpace.selected { runtime.foreground = [id] }
+        // This window's tab becomes the one commands act on.
+        if let id = windowSelection, windowSpace.allTabs.contains(id), windowSpace.selected != id { store.select(id) }
+        app.updateForeground()
     }
 }
 
 // MARK: - Sidebar
 
 extension BrowserWindowController: SidebarDelegate {
+    func sidebarOpenInSplit(_ id: TabID) { openInSplit(id) }
+
+    func sidebarTabDragBegan(_ id: TabID) { panes.beginTabDrop() }
+
+    func sidebarTabDragEnded(_ id: TabID, at screenPoint: NSPoint, accepted: Bool) {
+        panes.endTabDrop()
+        // Dropped outside every Aegis window: the tab tears off into a window of its own.
+        guard !accepted, !NSApp.windows.contains(where: { $0.isVisible && $0.frame.contains(screenPoint) }) else { return }
+        app.tearOff(id, from: self, at: screenPoint)
+    }
+
+    func sidebarToggleSidebar() { toggleSidebar() }
+
+    /// Tear-off: this window stops showing `id` (it stays in the space's list).
+    func releaseTab(_ id: TabID) {
+        if let g = windowSpace.split(containing: id) { store.removeFromSplit(id); _ = g }
+        guard shownSelection == id else { return }
+        let all = windowSpace.allTabs.filter { $0 != id }
+        let i = windowSpace.allTabs.firstIndex(of: id) ?? 0
+        windowSelection = all.isEmpty ? nil : all[min(i, all.count - 1)]
+        refresh()
+    }
+
+    /// A new window showing `id` (its space, that tab selected).
+    func adoptTab(_ id: TabID) {
+        windowSelection = id
+        store.select(id)
+        refresh()
+    }
+
     func sidebarSelect(_ id: TabID) { select(id) }
     func sidebarClose(_ id: TabID) { closeTab(id) }
     func sidebarNewTab() { openPalette(.newTab) }
@@ -600,7 +850,15 @@ extension BrowserWindowController: SidebarDelegate {
         guard let t = store.selectedTab.flatMap({ runtime.tab($0.id) }) else { return }
         t.isLoading ? t.stop() : t.reload()
     }
-    func sidebarMove(_ id: TabID, to tier: TabTier, index: Int) { store.move(id, to: tier, at: index) }
+    func sidebarMove(_ id: TabID, to tier: TabTier, index: Int) {
+        // Dragging one tab out of a split row into the list takes it out of the split.
+        if store.space(containing: id)?.split(containing: id) != nil { store.removeFromSplit(id) }
+        store.move(id, to: tier, at: index)
+    }
+
+    func sidebarSeparateSplit(_ id: TabID) {
+        if let g = store.space(containing: id)?.split(containing: id) { store.separate(g.id) }
+    }
     func sidebarSwitchSpace(_ index: Int) {
         let visible = visibleSpaces
         guard visible.indices.contains(index) else { return }
@@ -873,7 +1131,21 @@ extension BrowserWindowController: SidebarDelegate {
             NSPasteboard.general.setString(url.absoluteString, forType: .string)
         }
         item("Put Tab to Sleep") { [weak self] in Task { await self?.runtime.sleep(id) } }
+        menu.addItem(.separator())
         let space = store.space(containing: id)
+        if let g = space?.split(containing: id) {
+            item("Separate Split View") { [weak self] in self?.store.separate(g.id) }
+            if g.tabs.count > 2 { item("Remove from Split View") { [weak self] in self?.store.removeFromSplit(id) } }
+            item(g.vertical ? "Arrange Side by Side" : "Arrange Top to Bottom") { [weak self] in
+                self?.store.updateSplit(g.id) { $0.vertical.toggle() }
+            }
+        } else if let current = shownSelection, current != id, space?.id == windowSpace.id {
+            let full = (windowSpace.split(containing: current)?.tabs.count ?? 1) >= SplitGroup.maxPanes
+            let open = ClosureMenuItem(title: "Open in Split View") { [weak self] in self?.openInSplit(id) }
+            open.isEnabled = !full
+            menu.addItem(open)
+        }
+        menu.addItem(.separator())
         if let current = space?.folder(containing: id) {
             item("Remove from “\(current.name)”") { [weak self] in self?.store.removeFromFolder(id) }
         }

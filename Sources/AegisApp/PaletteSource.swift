@@ -31,6 +31,9 @@ final class PaletteSource: PaletteDataSource {
         PaletteCommand(id: "pip", title: "Picture in Picture", aliases: ["pip", "float video"], icon: "pip.enter"),
         PaletteCommand(id: "tabsOnTop", title: "Switch Tab Layout (Sidebar / Top)", aliases: ["horizontal tabs", "vertical tabs", "tab bar"], icon: "rectangle.topthird.inset.filled"),
         PaletteCommand(id: "sidebar", title: "Toggle Sidebar", aliases: ["hide sidebar", "focus"], shortcut: "⌘S", icon: "sidebar.left"),
+        PaletteCommand(id: "addSplit", title: "Add Split View", aliases: ["split screen", "side by side", "two tabs"], shortcut: "⌃⇧=", icon: "rectangle.split.2x1"),
+        PaletteCommand(id: "removeSplit", title: "Remove from Split View", aliases: ["unsplit", "close pane"], shortcut: "⌃⇧−", icon: "rectangle"),
+        PaletteCommand(id: "separateSplit", title: "Separate Split View", aliases: ["unsplit all", "separate tabs"], icon: "rectangle.on.rectangle"),
         PaletteCommand(id: "sleep", title: "Put Background Tabs to Sleep", aliases: ["hibernate", "memory", "free"], shortcut: "⌃⌥⌘H", icon: "moon.zzz"),
         PaletteCommand(id: "newFolder", title: "New Folder", aliases: ["folder", "group tabs"], shortcut: "⇧⌥⌘N", icon: "folder.badge.plus"),
         PaletteCommand(id: "newSpace", title: "New Space", aliases: ["profile", "container"], shortcut: "⌥⌘N", icon: "square.stack.3d.up"),
@@ -185,6 +188,9 @@ final class PaletteSource: PaletteDataSource {
             case "copyURL": c.copyURL()
             case "find": c.showFind()
             case "sidebar": c.toggleSidebar()
+            case "addSplit": c.addSplitView()
+            case "removeSplit": c.removeFromSplit()
+            case "separateSplit": c.separateSplit()
             case "tabsOnTop": d?.toggleTabsOnTop()
             case "library": c.openLibrary()
             case "playPause": c.toggleMediaAnywhere()

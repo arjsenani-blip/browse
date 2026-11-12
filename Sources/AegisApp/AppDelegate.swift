@@ -120,6 +120,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func findPrevious() { front?.findAgain(backwards: true) }
     @objc func commandPalette() { front?.openPalette(.command) }
     @objc func toggleSidebar() { front?.toggleSidebar() }
+    @objc func addSplitView() { front?.addSplitView() }
+    @objc func removeFromSplit() { front?.removeFromSplit() }
+    @objc func separateSplit() { front?.separateSplit() }
+    @objc func nextPane() { front?.focusPane(by: 1) }
+    @objc func previousPane() { front?.focusPane(by: -1) }
+    @objc func focusPane(_ sender: NSMenuItem) { front?.focusPane(at: sender.tag) }
     @objc func showLibrary() { front?.openLibrary() }
     @objc func toggleTabsOnTop() {
         let on = !(front?.tabsOnTop ?? false)
@@ -216,6 +222,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(toggleStripping): item.state = services.privacy.stripTrackingParameters ? .on : .off
         case #selector(toggleHTTPSOnly): item.state = services.privacy.httpsOnly ? .on : .off
         case #selector(toggleTabsOnTop): item.state = front?.tabsOnTop == true ? .on : .off
+        case #selector(toggleSidebar):
+            item.title = front?.sidebarHidden == true ? "Show Sidebar" : "Hide Sidebar"
+            return front?.tabsOnTop != true
+        case #selector(removeFromSplit), #selector(separateSplit), #selector(nextPane), #selector(previousPane), #selector(focusPane(_:)):
+            return front?.isInSplit == true
         case #selector(togglePin):
             item.title = front?.store.selectedTab?.tier == .pinned ? "Unpin Tab" : "Pin Tab"
             return front?.store.selectedTab != nil

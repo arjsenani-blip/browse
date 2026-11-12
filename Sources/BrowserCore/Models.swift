@@ -106,6 +106,26 @@ public struct Space: Codable, Sendable, Identifiable, Equatable {
 
     /// The folder holding a pinned tab, if any.
     public func folder(containing id: TabID) -> Folder? { folders.first { $0.tabs.contains(id) } }
+    /// Split views: tabs of this space shown side by side. Optional so older sessions still decode.
+    public var splitList: [SplitGroup]?
+    public var splits: [SplitGroup] {
+        get { splitList ?? [] }
+        set { splitList = newValue.isEmpty ? nil : newValue }
+    }
+    /// The split view a tab is part of, if any.
+    public func split(containing id: TabID) -> SplitGroup? { splits.first { $0.tabs.contains(id) } }
+
+    /// Drops a tab from its split; a split left with one tab dissolves.
+    public mutating func removeFromSplits(_ id: TabID) {
+        guard splits.contains(where: { $0.tabs.contains(id) }) else { return }
+        splits = splits.compactMap { g in
+            var g = g
+            guard let i = g.tabs.firstIndex(of: id) else { return g }
+            g.tabs.remove(at: i)
+            if var f = g.fractions, f.count > i { f.remove(at: i); g.fractions = SplitGroup.normalized(f) }
+            return g.tabs.count >= 2 ? g : nil
+        }
+    }
     public static let icons = ["house", "briefcase", "flask", "book.closed", "paintpalette", "gamecontroller",
                                "music.note", "airplane", "leaf", "graduationcap", "cart", "heart"]
 
@@ -168,9 +188,42 @@ public struct ArchivedTab: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
-/// A folder in a space's Pinned section (one level, like most Arc use). Its
-/// tabs are pinned tabs; `position` is where the folder sits among the
-/// top-level pinned items (loose tabs and folders).
+/// A folder in a space's Pinned section. Its tabs are pinned tabs.
+///
+/// Folders can nest: `parentID` names the containing folder (nil = top level).
+/// `position` is the folder's slot among its siblings: for a top-level folder,
+/// among the loose pinned tabs and other top-level folders; for a subfolder,
+/// among its parent's tabs and subfolders. (The sidebar currently renders one
+/// level; nesting support in the model is ready for the UI. See docs/subfolders.md.)
+/// Two to four tabs of one space shown side by side (or stacked) in one window.
+public struct SplitGroup: Codable, Sendable, Identifiable, Equatable {
+    public static let maxPanes = 4
+    public var id: UUID
+    /// Left to right (top to bottom when `vertical`).
+    public var tabs: [TabID]
+    public var vertical: Bool
+    /// Pane sizes, summing to 1; nil means equal.
+    public var fractions: [Double]?
+
+    public init(id: UUID = UUID(), tabs: [TabID], vertical: Bool = false, fractions: [Double]? = nil) {
+        self.id = id; self.tabs = tabs; self.vertical = vertical; self.fractions = fractions
+    }
+
+    /// Sizes for display: the stored ones if they fit the pane count, else equal.
+    public var sizes: [Double] {
+        if let f = fractions, f.count == tabs.count { return f }
+        return Array(repeating: 1 / Double(max(tabs.count, 1)), count: tabs.count)
+    }
+
+    /// Scales to sum 1, with every pane at least 15%.
+    public static func normalized(_ f: [Double]) -> [Double]? {
+        guard !f.isEmpty else { return nil }
+        let clamped = f.map { max($0, 0.15) }
+        let sum = clamped.reduce(0, +)
+        return clamped.map { $0 / sum }
+    }
+}
+
 public struct Folder: Codable, Sendable, Identifiable, Equatable {
     public var id: UUID
     public var name: String
@@ -179,9 +232,13 @@ public struct Folder: Codable, Sendable, Identifiable, Equatable {
     public var isExpanded: Bool
     public var tabs: [TabID]
     public var position: Int
+    /// Containing folder; nil at the top level. Optional so older sessions decode.
+    public var parentID: UUID?
 
-    public init(id: UUID = UUID(), name: String = "Untitled", icon: String? = nil, isExpanded: Bool = true, tabs: [TabID] = [], position: Int = 0) {
-        self.id = id; self.name = name; self.icon = icon; self.isExpanded = isExpanded; self.tabs = tabs; self.position = position
+    public init(id: UUID = UUID(), name: String = "Untitled", icon: String? = nil, isExpanded: Bool = true,
+                tabs: [TabID] = [], position: Int = 0, parentID: UUID? = nil) {
+        self.id = id; self.name = name; self.icon = icon; self.isExpanded = isExpanded
+        self.tabs = tabs; self.position = position; self.parentID = parentID
     }
 }
 
@@ -192,13 +249,68 @@ public enum PinnedEntry: Equatable, Sendable {
 }
 
 public extension Space {
-    /// Loose pinned tabs and folders interleaved by folder position.
+    /// Deepest nesting allowed: a top-level folder is depth 0, so this permits
+    /// folders four levels deep (matches the research recommendation).
+    static let maxFolderDepth = 4
+
+    /// Top-level Pinned: loose pinned tabs and top-level folders, interleaved by folder position.
     var pinnedEntries: [PinnedEntry] {
         let inFolders = Set(folders.flatMap(\.tabs))
-        var entries: [PinnedEntry] = pinned.filter { !inFolders.contains($0) }.map { .tab($0) }
-        for f in folders.sorted(by: { $0.position < $1.position }) {
-            entries.insert(.folder(f), at: min(max(0, f.position), entries.count))
+        return interleave(tabs: pinned.filter { !inFolders.contains($0) }, folders: subfolders(of: nil))
+    }
+
+    /// A folder's contents: its tabs and direct subfolders, interleaved by subfolder position.
+    func entries(in folderID: UUID) -> [PinnedEntry] {
+        guard let folder = folders.first(where: { $0.id == folderID }) else { return [] }
+        return interleave(tabs: folder.tabs, folders: subfolders(of: folderID))
+    }
+
+    /// Direct children of a folder (nil = top level), in position order.
+    func subfolders(of parent: UUID?) -> [Folder] {
+        folders.filter { $0.parentID == parent }.sorted { $0.position < $1.position }
+    }
+
+    /// 0 for a top-level folder, 1 for its subfolders, and so on.
+    func depth(of folderID: UUID) -> Int { ancestors(of: folderID).count }
+
+    /// Containing folders, nearest first. Stops on a broken or cyclic chain.
+    func ancestors(of folderID: UUID) -> [UUID] {
+        var chain: [UUID] = []
+        var current = folders.first { $0.id == folderID }?.parentID
+        while let id = current, !chain.contains(id), chain.count <= folders.count {
+            chain.append(id)
+            current = folders.first { $0.id == id }?.parentID
         }
+        return chain
+    }
+
+    /// Every folder nested anywhere under this one.
+    func descendants(of folderID: UUID) -> [UUID] {
+        var result: [UUID] = []
+        var queue = subfolders(of: folderID).map(\.id)
+        while let id = queue.first {
+            queue.removeFirst()
+            guard !result.contains(id) else { continue }
+            result.append(id)
+            queue += subfolders(of: id).map(\.id)
+        }
+        return result
+    }
+
+    /// Levels below this folder (0 if it has no subfolders).
+    func subtreeHeight(of folderID: UUID) -> Int {
+        let kids = subfolders(of: folderID)
+        return kids.isEmpty ? 0 : 1 + (kids.map { subtreeHeight(of: $0.id) }.max() ?? 0)
+    }
+
+    /// Every tab in a folder and all of its subfolders.
+    func allTabs(inFolder folderID: UUID) -> [TabID] {
+        ([folderID] + descendants(of: folderID)).flatMap { id in folders.first { $0.id == id }?.tabs ?? [] }
+    }
+
+    private func interleave(tabs: [TabID], folders: [Folder]) -> [PinnedEntry] {
+        var entries: [PinnedEntry] = tabs.map { .tab($0) }
+        for f in folders { entries.insert(.folder(f), at: min(max(0, f.position), entries.count)) }
         return entries
     }
 }

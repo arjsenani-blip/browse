@@ -152,6 +152,7 @@ final class AppServices {
 
     func windowClosed(_ c: BrowserWindowController) {
         controllers.removeAll { $0 === c }
+        updateForeground()
         if c.isPrivateWindow, let sid = c.spaceID, let space = store.spaces.first(where: { $0.id == sid }) {
             let profile = space.profileID
             for id in space.allTabs { runtime.discard(id) }
@@ -167,6 +168,32 @@ final class AppServices {
         if controllers.isEmpty { newWindow() }
         frontController?.navigate(to: url, newTab: true, typed: false)
         NSApp.activate()
+    }
+
+    /// A sidebar tab dropped outside every window: a new window at the drop point shows it, and
+    /// the source window moves on to a neighbour. The tab stays in its space's list.
+    func tearOff(_ id: TabID, from source: BrowserWindowController, at screenPoint: NSPoint) {
+        guard let space = store.space(containing: id), store.tabs[id] != nil else { return }
+        source.releaseTab(id)
+        let c = BrowserWindowController(app: self, spaceID: space.id, isPrivate: source.isPrivateWindow)
+        if let window = c.window, let srcWindow = source.window {
+            let size = NSSize(width: max(srcWindow.frame.width * 0.6, 760), height: srcWindow.frame.height)
+            var origin = NSPoint(x: screenPoint.x - 120, y: screenPoint.y - size.height + 20)
+            if let visible = (NSScreen.screens.first { $0.frame.contains(screenPoint) } ?? srcWindow.screen)?.visibleFrame {
+                origin.x = min(max(origin.x, visible.minX), visible.maxX - size.width)
+                origin.y = min(max(origin.y, visible.minY), visible.maxY - size.height)
+            }
+            window.setFrame(NSRect(origin: origin, size: size), display: false)
+        }
+        controllers.append(c)
+        c.adoptTab(id)
+        c.showWindow(nil)
+        c.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Every tab on screen in any window: never hibernated, crash-reloaded in place.
+    func updateForeground() {
+        runtime.foreground = Set(controllers.flatMap(\.visibleTabs))
     }
 
     func move(_ id: TabID, toSpace spaceID: UUID) {

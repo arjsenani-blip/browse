@@ -216,16 +216,14 @@ enum PasskeyShim {
 }
 
 /// Per-site fixes for sites that misbehave with Aegis's Safari-style user agent.
+/// Empty for now. Google Docs used to need one, but with the current Safari
+/// version in the default user agent it is supported and renders sharply.
+/// (Version/26 renders its canvas at quarter resolution; dropping the Version
+/// token shows an "unsupported browser" banner.)
 enum SiteQuirks {
-    static let base = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+    static let userAgents: [String: String] = [:]
 
-    /// Google Docs/Sheets/Slides see "Version/x Safari" and take a Safari-only
-    /// path that, outside Safari, renders the document canvas at half
-    /// resolution (408 px for 816 pt on a 2x display: blurry text). Without the
-    /// Version token they render at full resolution (verified in a bare WKWebView).
     static func userAgent(for host: String?) -> String? {
-        guard let host else { return nil }
-        if host == "docs.google.com" { return base + " Safari/605.1.15" }
-        return nil
+        host.flatMap { userAgents[$0] }
     }
 }

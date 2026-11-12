@@ -173,6 +173,27 @@ enum DebugSnapshot {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { services.frontController?.openLibrary(tab: args.contains("--media") ? .media : .downloads) }
             }
             if args.contains("--reader") { services.frontController?.toggleReader() }
+            if args.contains("--split"), let c = services.frontController {
+                // Split the selected tab with the previous one (or the last two opened); --vertical stacks them,
+                // --split3 adds a third pane.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    let today = c.store.currentSpace.today
+                    guard today.count >= 2, let sel = c.store.selectedTab?.id else { print("SPLIT need two tabs"); return }
+                    let other = today.last { $0 != sel }!
+                    if let g = c.store.split(sel, with: other) {
+                        if args.contains("--vertical") { c.store.updateSplit(g) { $0.vertical = true } }
+                        if args.contains("--split3"), let third = today.first(where: { $0 != sel && $0 != other }) { c.store.split(other, with: third) }
+                    }
+                    print("SPLIT \(c.store.currentSpace.splits.map { $0.tabs.count })"); fflush(stdout)
+                }
+            }
+            if args.contains("--hide-sidebar"), let c = services.frontController {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    c.setSidebarHidden(true, animated: false)
+                    if args.contains("--peek") { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { c.debugShowPeek() } }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { print("PANES \(c.debugPanes)"); fflush(stdout) }
+                }
+            }
             if let k = args.firstIndex(of: "--loadbench"), let c = services.frontController {
                 // Loads each URL in the selected tab and reports time to the load finishing.
                 let urls = args[(k + 1)...].prefix(while: { !$0.hasPrefix("--") }).compactMap(URL.init(string:))
