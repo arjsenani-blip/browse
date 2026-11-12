@@ -180,6 +180,13 @@ final class ProxyEngine: @unchecked Sendable {
     private var listener: NWListener?
     private var resolver: EncryptedDNSProxy.Resolver
     private var privacyContext: NWParameters.PrivacyContext?
+    /// Upstream connects that failed in a row with no success between them. A run of
+    /// them means the encrypted resolver itself is unreachable (blocked, or its
+    /// certificate is intercepted), so new connections move to a backup resolver,
+    /// still encrypted, rather than every page hanging for the full connect timeout.
+    private var consecutiveFailures = 0
+    private(set) var usingBackupResolver = false
+    static let failoverThreshold = 3
     private var sessions: [ObjectIdentifier: ProxySession] = [:]
     private(set) var listenPort: UInt16 = 0
     private var startContinuation: CheckedContinuation<UInt16, Error>?
@@ -206,7 +213,30 @@ final class ProxyEngine: @unchecked Sendable {
         queue.async {
             self.resolver = resolver
             self.privacyContext = Self.makePrivacyContext(for: resolver)
+            self.consecutiveFailures = 0
+            self.usingBackupResolver = false
         }
+    }
+
+    static func backup(for resolver: EncryptedDNSProxy.Resolver) -> EncryptedDNSProxy.Resolver? {
+        switch resolver {
+        case .off: nil
+        case .quad9: .cloudflare
+        case .cloudflare, .mullvad: .quad9
+        }
+    }
+
+    /// Called on `queue` when an upstream connect succeeds or fails.
+    func recordUpstream(success: Bool) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        if success { consecutiveFailures = 0; return }
+        consecutiveFailures += 1
+        guard consecutiveFailures >= Self.failoverThreshold, !usingBackupResolver,
+              let backup = Self.backup(for: resolver) else { return }
+        usingBackupResolver = true
+        consecutiveFailures = 0
+        privacyContext = Self.makePrivacyContext(for: backup)
+        log.notice("Resolver \(self.resolver.rawValue, privacy: .public) unreachable; using \(backup.rawValue, privacy: .public) for this session")
     }
 
     func setEstablishmentReportHandler(_ handler: (@Sendable (NWConnection.EstablishmentReport) -> Void)?) {
@@ -521,7 +551,10 @@ final class ProxySession: @unchecked Sendable {
         let connection = NWConnection(host: NWEndpoint.Host(request.host), port: port, using: engine.outboundParameters())
         upstream = connection
 
-        let timer = DispatchWorkItem { [weak self] in self?.respondAndClose(504, "Gateway Timeout") }
+        let timer = DispatchWorkItem { [weak self] in
+            self?.engine.recordUpstream(success: false)
+            self?.respondAndClose(504, "Gateway Timeout")
+        }
         connectTimer = timer
         queue.asyncAfter(deadline: .now() + ProxyEngine.connectTimeout, execute: timer)
 
@@ -532,6 +565,7 @@ final class ProxySession: @unchecked Sendable {
                 guard !self.established else { return }
                 self.established = true
                 self.connectTimer?.cancel()
+                self.engine.recordUpstream(success: true)
                 if let handler = self.engine.establishmentReportHandler {
                     connection.requestEstablishmentReport(queue: self.queue) { report in
                         if let report { handler(report) }

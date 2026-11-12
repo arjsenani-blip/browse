@@ -51,13 +51,36 @@ public final class WebTab: NSObject {
         webView?.evaluateJavaScript(MediaScript.pictureInPicture, in: nil, in: Worlds.media)
     }
 
-    /// Snapshot shown while a sleeping tab wakes.
+    /// Snapshot shown while a sleeping tab wakes. Taken when the page leaves the screen
+    /// (`captureSnapshot`), because a view that is off screen or whose process died
+    /// snapshots as a blank white image.
     public private(set) var snapshot: NSImage?
+    /// When the page last committed since waking: the wake snapshot can go shortly after,
+    /// without waiting for a load event that some sites never fire.
+    public private(set) var committedSinceWake: Date?
+
+    /// Grabs what's on screen now. Call just before the page leaves its card.
+    public func captureSnapshot() {
+        guard let view = webView, view.window != nil, !view.bounds.isEmpty else { return }
+        let config = WKSnapshotConfiguration()
+        config.afterScreenUpdates = false
+        config.snapshotWidth = NSNumber(value: Double(min(view.bounds.width, 1280)))
+        view.takeSnapshot(with: config) { [weak self] image, _ in
+            MainActor.assumeIsolated { if let image { self?.snapshot = image } }
+        }
+    }
 
     private var observations: [NSKeyValueObservation] = []
     private var dialogTimes: [Date] = []
     private var dialogsSuppressed = false
     private var pendingTyped = false
+    /// The address a failed load was for, while the error page stands in for it.
+    fileprivate var failedURL: URL?
+    /// One quiet retry per address for transient network errors.
+    fileprivate var retriedURL: URL?
+    /// The next commit is the error page itself, not the site.
+    fileprivate var errorPagePending = false
+    fileprivate var provisionalStart = Date.distantPast
 
     public init(id: TabID, context: ProfileContext) {
         self.id = id
@@ -71,6 +94,7 @@ public final class WebTab: NSObject {
     @discardableResult
     public func wake(url: URL?, interactionState: Data?, existing: WKWebView? = nil) -> WKWebView {
         if let webView { return webView }
+        committedSinceWake = nil
         let view = existing ?? WKWebView(frame: .zero, configuration: context.makeConfiguration())
         view.navigationDelegate = self
         view.uiDelegate = self
@@ -97,9 +121,12 @@ public final class WebTab: NSObject {
     @discardableResult
     public func sleep() async -> Data? {
         guard let view = webView else { return nil }
-        let config = WKSnapshotConfiguration()
-        config.afterScreenUpdates = false
-        snapshot = try? await view.takeSnapshot(configuration: config)
+        // Only a visible page snapshots correctly; otherwise keep the one taken when it left the screen.
+        if view.window != nil {
+            let config = WKSnapshotConfiguration()
+            config.afterScreenUpdates = false
+            if let image = try? await view.takeSnapshot(configuration: config) { snapshot = image }
+        }
         let state = view.interactionState as? Data
         observations.removeAll()
         context.unregister(view)
@@ -142,7 +169,10 @@ public final class WebTab: NSObject {
 
     public func goBack() { webView?.goBack() }
     public func goForward() { webView?.goForward() }
-    public func reload() { webView?.reload() }
+    public func reload() {
+        // The error page is a stand-in: reloading means trying the real address again.
+        if let failedURL { webView?.load(URLRequest(url: failedURL)) } else { webView?.reload() }
+    }
     public func stop() { webView?.stopLoading() }
 
     /// Runs the reader extraction in the isolated reader world.
@@ -266,19 +296,28 @@ extension WebTab: WKNavigationDelegate {
     }
 
     public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        provisionalStart = Date()
         isReaderable = false
         dialogsSuppressed = false
         dialogTimes = []
         changed()
     }
 
+    public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        handleLoadFailure(webView, error: error as NSError)
+    }
+
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if errorPagePending { errorPagePending = false; return }   // no cosmetics, no history entry
+        failedURL = nil
+        committedSinceWake = committedSinceWake ?? Date()
         if let host = webView.url?.host() { injectCosmetics(host: host) }
         if let url = webView.url { delegate?.webTab(self, didCommit: url, title: webView.title, typed: pendingTyped) }
         pendingTyped = false
     }
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if webView.url == retriedURL, failedURL == nil { retriedURL = nil }
         if let url = webView.url { delegate?.webTabDidFinish(self, url: url, title: webView.title) }
         probeReader()
     }
@@ -363,5 +402,106 @@ extension WebTab {
         }
         if body["type"] as? String == "formDirty" { setFormDirty(body["dirty"] as? Bool ?? false) }
         delegate?.webTab(self, autofillMessage: body)
+    }
+}
+
+// MARK: - Load failures
+
+extension WebTab {
+    /// A page that failed before anything committed used to leave a blank white card with no way
+    /// out. Transient network errors get one quiet retry; anything else (or a second failure)
+    /// shows an error page that keeps the address and offers Try Again.
+    func handleLoadFailure(_ webView: WKWebView, error: NSError) {
+        guard let action = LoadFailure.action(for: error, after: Date().timeIntervalSince(provisionalStart)) else { return }
+        let url = (error.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? webView.url
+        guard let url, url.scheme == "http" || url.scheme == "https" else { return }
+        if action == .retry, retriedURL != url {
+            retriedURL = url
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self, weak webView] in
+                guard let self, let webView, self.webView === webView else { return }
+                webView.load(URLRequest(url: url))
+            }
+            return
+        }
+        retriedURL = nil
+        failedURL = url
+        errorPagePending = true
+        webView.loadSimulatedRequest(URLRequest(url: url), responseHTML: LoadFailure.page(for: error, url: url))
+    }
+}
+
+public enum LoadFailure {
+    public enum Action: Equatable { case retry, showPage }
+
+    /// nil: not a failure worth showing (a cancelled load, a link that became a download, a
+    /// navigation the page or a policy stopped).
+    /// `elapsed`: how long the load ran before failing. Only quick failures are retried, so a
+    /// stalled site doesn't keep the card blank twice as long.
+    public static func action(for error: NSError, after elapsed: TimeInterval = 0) -> Action? {
+        let transient: Bool
+        if error.domain == NSURLErrorDomain {
+            switch error.code {
+            case NSURLErrorCancelled: return nil
+            // BadURL: what WebKit reports when the DoH proxy answers a CONNECT with 502/504
+            // (the site couldn't be reached); the address itself was fine.
+            case NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorCannotConnectToHost,
+                 NSURLErrorDNSLookupFailed, NSURLErrorCannotFindHost, NSURLErrorSecureConnectionFailed,
+                 NSURLErrorBadServerResponse, NSURLErrorBadURL:
+                transient = true
+            default: transient = false
+            }
+        } else if error.domain == kCFErrorDomainCFNetwork as String {
+            // Proxy tunnel failures (the DoH proxy couldn't reach the site): 310, 311.
+            transient = [310, 311].contains(error.code)
+        } else if error.domain == "WebKitErrorDomain" {
+            // WebKit's own codes are policy outcomes (102 = load interrupted, e.g. by a download).
+            return nil
+        } else {
+            transient = false
+        }
+        return transient && elapsed < 5 ? .retry : .showPage
+    }
+
+    static func message(for error: NSError) -> (title: String, detail: String) {
+        guard error.domain == NSURLErrorDomain else { return ("This page couldn't load", error.localizedDescription) }
+        switch error.code {
+        case NSURLErrorNotConnectedToInternet: return ("You're offline", "Check your Wi-Fi or network connection, then try again.")
+        case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed: return ("Can't find this site", "The address may be mistyped, or the site's name couldn't be looked up.")
+        case NSURLErrorTimedOut: return ("The site took too long to respond", "It may be busy or down. Try again in a moment.")
+        case NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost, NSURLErrorBadURL:
+            return ("Couldn't connect to this site", "The site didn't answer, or the connection was dropped. It may be down, or blocked on this network.")
+        case NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateHasUnknownRoot,
+             NSURLErrorServerCertificateNotYetValid, NSURLErrorSecureConnectionFailed:
+            return ("This connection isn't secure", "Aegis couldn't verify the site's identity, so it didn't load the page.")
+        default: return ("This page couldn't load", error.localizedDescription)
+        }
+    }
+
+    static func page(for error: NSError, url: URL) -> String {
+        let (title, detail) = message(for: error)
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+        }
+        let host = esc(url.host() ?? url.absoluteString)
+        let href = esc(url.absoluteString)
+        return """
+        <!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+        <title>\(esc(title))</title><style>
+        :root { font: 15px/1.5 -apple-system, system-ui; color: #1d1d1f; background: #fff; }
+        @media (prefers-color-scheme: dark) { :root { color: #f5f5f7; background: #1c1c1e; } .host { background: #2c2c2e; } }
+        body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+        main { max-width: 440px; padding: 32px; }
+        h1 { font-size: 22px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+        p { margin: 0 0 20px; opacity: .72; }
+        .host { display: inline-block; font: 13px ui-monospace, SFMono-Regular, monospace; background: #f2f2f4;
+                border-radius: 6px; padding: 2px 8px; margin-bottom: 16px; }
+        a.button { display: inline-block; font-weight: 500; text-decoration: none; color: #fff; background: #0a84ff;
+                   border-radius: 8px; padding: 7px 16px; }
+        </style></head><body><main>
+        <div class="host">\(host)</div><h1>\(esc(title))</h1><p>\(esc(detail))</p>
+        <a class="button" href="\(href)">Try Again</a>
+        </main></body></html>
+        """
     }
 }

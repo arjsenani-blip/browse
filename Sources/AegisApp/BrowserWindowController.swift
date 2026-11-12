@@ -350,7 +350,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             s.canGoForward = live.canGoForward
             s.isLoading = live.isLoading
             focusCard.setProgress(live.progress, loading: live.isLoading, hue: space.accentHue)
-            if !live.isLoading && live.progress >= 1 { focusCard.dismissSnapshot() }
+            // Gone once the page has painted: finished, or committed a moment ago (some sites never fire load).
+            if (!live.isLoading && live.progress >= 1) || live.committedSinceWake.map({ Date().timeIntervalSince($0) > 0.4 }) == true {
+                focusCard.dismissSnapshot()
+            }
             panes.accentHue = space.accentHue
         }
         background.set(themes: visible.map(\.resolvedTheme), current: s.currentIndex, keepingAnimation: true)
@@ -421,6 +424,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let tabs = group?.tabs.filter { store.tabs[$0] != nil } ?? [id]
         let focus = tabs.firstIndex(of: id) ?? 0
         let spaceChanged = shownTab.map { store.space(containing: $0)?.id != spaceID } ?? false
+        // Pages leaving the screen: snapshot them while they're still painted, for their wake later.
+        for old in visibleTabs where !tabs.contains(old) { runtime.existingTab(old)?.captureSnapshot() }
         arrangePanes(tabs, sizes: group?.sizes ?? [1], vertical: group?.vertical ?? false, focus: focus)
         for t in tabs {
             let wasSleeping = store.tabs[t]?.isSleeping ?? false

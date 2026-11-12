@@ -298,11 +298,18 @@ public final class SidebarViewController: NSViewController {
         let old = state
         state = new
         let style = new.style
-        view.appearance = style.tinted ? NSAppearance(named: style.onDark ? .darkAqua : .aqua) : nil
+        // Setting the appearance or an SF Symbol re-resolves the whole subtree / glyph, even
+        // when nothing changed; refresh runs many times a second while pages load.
+        let appearanceName: NSAppearance.Name? = style.tinted ? (style.onDark ? .darkAqua : .aqua) : nil
+        if view.appearance?.name != appearanceName {
+            view.appearance = appearanceName.map { NSAppearance(named: $0) } ?? nil
+        }
 
-        backButton.isEnabled = new.canGoBack
-        forwardButton.isEnabled = new.canGoForward
-        reloadButton.image = NSImage(systemSymbolName: new.isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: new.isLoading ? "Stop" : "Reload")
+        if backButton.isEnabled != new.canGoBack { backButton.isEnabled = new.canGoBack }
+        if forwardButton.isEnabled != new.canGoForward { forwardButton.isEnabled = new.canGoForward }
+        if old.isLoading != new.isLoading || reloadButton.image == nil {
+            reloadButton.image = NSImage(systemSymbolName: new.isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: new.isLoading ? "Stop" : "Reload")
+        }
         urlPill.update(host: new.host, secure: new.isSecure, blocker: new.blockerOn, hue: new.accentHue, style: style)
 
         if old.nowPlaying != new.nowPlaying || old.style != new.style {
@@ -365,7 +372,13 @@ public final class SidebarViewController: NSViewController {
     /// Kept for callers; pages are live now, so there's nothing to cache.
     public func cacheCurrentSpaceSnapshot() {}
 
+    private var indicatorSignature: [String] = []
+
     private func rebuildSpaceIndicator() {
+        // Chips show only each space's name, icon and theme; don't redo them on every tab change.
+        let signature = state.pages.map { "\($0.id)|\($0.name)|\($0.icon)|\($0.theme)" } + ["\(state.currentIndex)", "\(state.style)"]
+        guard signature != indicatorSignature else { return }
+        indicatorSignature = signature
         let count = state.pages.count
         if spaceDots.arrangedSubviews.count != count {
             spaceDots.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -751,7 +764,9 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let old = page, oldStyle = style
         page = new
         style = newStyle
-        if old.favorites != new.favorites || old.selected != new.selected || oldStyle != newStyle || favoritesGrid.arrangedSubviews.isEmpty != new.favorites.isEmpty {
+        let favoriteSelectionChanged = old.selected != new.selected
+            && new.favorites.contains { $0.id == old.selected || $0.id == new.selected }
+        if old.favorites != new.favorites || favoriteSelectionChanged || oldStyle != newStyle || favoritesGrid.arrangedSubviews.isEmpty != new.favorites.isEmpty {
             favoritesGrid.arrangedSubviews.forEach { $0.removeFromSuperview() }
             let favs = Array(new.favorites.prefix(12))
             // Four to a row, like Arc; a short last row keeps tile size (spacers fill).
@@ -795,7 +810,20 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.rowHeight = newStyle.rowHeight
         let oldKeys = oldRows.map(\.key), newKeys = items.map(\.key)
         if oldKeys == newKeys, oldStyle == newStyle {
-            table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<rows.count), columnIndexes: [0])
+            // Same rows: touch only the ones whose content or highlight changed, and update their
+            // existing cells in place. Reloading every row on each title or progress tick rebuilt
+            // all the cell views and their key-view loop: up to 300 ms of main thread per redraw.
+            func touchesSelection(_ item: Item) -> Bool {
+                switch item {
+                case .tab(let r, _), .child(let r, _):
+                    return old.selected != new.selected && r.members.contains { $0 == old.selected || $0 == new.selected }
+                case .divider: return old.selected != new.selected || old.today.count != new.today.count
+                default: return false
+                }
+            }
+            for i in rows.indices where oldRows[i] != rows[i] || touchesSelection(rows[i]) {
+                if let v = table.view(atColumn: 0, row: i, makeIfNecessary: false) { configure(v, row: i) }
+            }
             return
         }
         // One contiguous insertion or removal (folder expand/collapse, a tab
@@ -857,34 +885,36 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let v: NSView
+        switch rows[row] {
+        case .divider: v = tableView.makeView(withIdentifier: DividerCell.id, owner: nil) as? DividerCell ?? DividerCell()
+        case .newTab, .tab, .child: v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
+        case .folder: v = tableView.makeView(withIdentifier: FolderCell.id, owner: nil) as? FolderCell ?? FolderCell()
+        }
+        configure(v, row: row)
+        return v
+    }
+
+    /// Fills a cell for `rows[row]`; used for new cells and to update visible ones in place.
+    private func configure(_ view: NSView, row: Int) {
         switch rows[row] {
         case .divider:
-            let v = tableView.makeView(withIdentifier: DividerCell.id, owner: nil) as? DividerCell ?? DividerCell()
+            guard let v = view as? DividerCell else { return }
             let selectedIsToday = page.today.contains { $0.id == page.selected }
             v.onClear = page.today.count > (selectedIsToday ? 1 : 0)
                 ? { [weak self] in self?.delegate?.sidebarClearToday() } : nil
-            return v
         case .newTab:
-            let v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
-            v.configureNewTab(style: style)
-            return v
-        case .tab(let r, _):
-            let v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
-            v.configure(r, selected: r.members.contains { $0 == page.selected }, style: style, focused: page.selected)
+            (view as? TabCell)?.configureNewTab(style: style)
+        case .tab(let r, _), .child(let r, _):
+            guard let v = view as? TabCell else { return }
+            let indent: CGFloat = if case .child = rows[row] { 14 } else { 0 }
+            v.configure(r, selected: r.members.contains { $0 == page.selected }, style: style, indent: indent, focused: page.selected)
             v.onClose = { [weak self] in self?.delegate?.sidebarClose(r.id) }
             v.onSeparate = r.split == nil ? nil : { [weak self] in self?.delegate?.sidebarSeparateSplit(r.id) }
-            return v
-        case .child(let r, _):
-            let v = tableView.makeView(withIdentifier: TabCell.id, owner: nil) as? TabCell ?? TabCell()
-            v.configure(r, selected: r.members.contains { $0 == page.selected }, style: style, indent: 14, focused: page.selected)
-            v.onClose = { [weak self] in self?.delegate?.sidebarClose(r.id) }
-            v.onSeparate = r.split == nil ? nil : { [weak self] in self?.delegate?.sidebarSeparateSplit(r.id) }
-            return v
         case .folder(let f):
-            let v = tableView.makeView(withIdentifier: FolderCell.id, owner: nil) as? FolderCell ?? FolderCell()
+            guard let v = view as? FolderCell else { return }
             v.configure(f, style: style)
             v.onRename = { [weak self] name in self?.delegate?.sidebarRenameFolder(f.id, to: name) }
-            return v
         }
     }
 
@@ -1048,6 +1078,8 @@ final class TabCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 
     private var iconLeading: NSLayoutConstraint?
+    /// The pointer is over the row; a reconfigure (title or loading change) keeps the hover look.
+    private var hovering = false
 
     func configure(_ row: SidebarState.Row, selected: Bool, style: SidebarStyle, indent: CGFloat = 0, focused: TabID? = nil) {
         iconLeading?.constant = 10 + indent
@@ -1057,7 +1089,8 @@ final class TabCell: NSTableCellView {
         label.stringValue = row.title
         label.textColor = .labelColor
         label.font = .systemFont(ofSize: style.fontSize, weight: selected ? .medium : .regular)
-        background.layer?.backgroundColor = selected ? style.selectionFill.cgColor : NSColor.clear.cgColor
+        background.layer?.backgroundColor = selected ? style.selectionFill.cgColor
+            : hovering ? style.quietFill.withAlphaComponent(style.onDark ? 0.06 : 0.22).cgColor : NSColor.clear.cgColor
         background.layer?.shadowOpacity = selected && style.tinted && !style.onDark ? 0.08 : 0
         background.layer?.shadowRadius = 2
         background.layer?.shadowOffset = CGSize(width: 0, height: -1)
@@ -1074,7 +1107,7 @@ final class TabCell: NSTableCellView {
                 self.setIcon(image)
             }
         }
-        closeButton.isHidden = true
+        closeButton.isHidden = !hovering
         closeButton.image = NSImage(systemSymbolName: isSplitRow ? "rectangle.split.2x1" : "xmark",
                                     accessibilityDescription: isSplitRow ? "Separate Split View" : "Close Tab")
         closeButton.toolTip = isSplitRow ? "Separate Split View" : nil
@@ -1111,12 +1144,16 @@ final class TabCell: NSTableCellView {
         return segmentViews.first { $0.frame.insetBy(dx: -1, dy: -3).contains(segments.convert(point, from: self)) }?.tabID
     }
 
+    private var iconPlate = false
     /// Dark favicons (GitHub, X…) vanish on dark themes: give them a light plate.
     private func setIcon(_ image: NSImage) {
+        // Same image and plate: skip (setting an image view's image dirties layout every time).
+        let plate = style.onDark && Favicons.isDark(image)
+        if icon.image === image, iconPlate == plate { return }
+        iconPlate = plate
         icon.image = image
         icon.contentTintColor = nil
         icon.wantsLayer = true
-        let plate = style.onDark && Favicons.isDark(image)
         icon.layer?.backgroundColor = plate ? NSColor.white.withAlphaComponent(0.88).cgColor : nil
         icon.layer?.cornerRadius = 3.5
     }
@@ -1150,10 +1187,12 @@ final class TabCell: NSTableCellView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        hovering = true
         closeButton.isHidden = (isSplitRow ? onSeparate : onClose) == nil
         if !selected { background.layer?.backgroundColor = style.quietFill.withAlphaComponent(style.onDark ? 0.06 : 0.22).cgColor }
     }
     override func mouseExited(with event: NSEvent) {
+        hovering = false
         closeButton.isHidden = true
         if !selected { background.layer?.backgroundColor = NSColor.clear.cgColor }
     }
@@ -1299,7 +1338,11 @@ final class URLPill: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    private var lastUpdate: (String, Bool, Bool, Double, SidebarStyle)?
+
     func update(host text: String, secure: Bool, blocker: Bool, hue: Double, style: SidebarStyle) {
+        if let l = lastUpdate, l.0 == text, l.1 == secure, l.2 == blocker, l.3 == hue, l.4 == style { return }
+        lastUpdate = (text, secure, blocker, hue, style)
         self.style = style
         host.stringValue = text.isEmpty ? "Search or enter address" : text
         host.textColor = text.isEmpty ? Tokens.secondaryInk : .labelColor

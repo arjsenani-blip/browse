@@ -165,6 +165,12 @@ public final class ContentCard: NSView {
             snapshotView.image = snapshot
             snapshotView.isHidden = false
             snapshotView.alphaValue = 1
+            // Never leave a stale picture over a live page, whatever the load does.
+            let shown = snapshot
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, self.snapshotView.image === shown else { return }
+                self.dismissSnapshot()
+            }
         } else {
             snapshotView.isHidden = true
         }
