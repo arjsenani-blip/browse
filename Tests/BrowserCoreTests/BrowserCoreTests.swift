@@ -29,7 +29,7 @@ import Testing
     func searchesText(input: String) {
         let url = URLInput.resolve(input)
         // "node.js" is a valid-looking host (js TLD); everything else searches.
-        if input == "node.js" { #expect(url?.host() == "node.js") } else { #expect(url?.host() == "duckduckgo.com") }
+        if input == "node.js" { #expect(url?.host() == "node.js") } else { #expect(url?.host() == "www.google.com") }
     }
 
     @Test func emptyIsNil() { #expect(URLInput.resolve("   ") == nil) }

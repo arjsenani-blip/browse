@@ -94,7 +94,8 @@ final class PaletteSource: PaletteDataSource {
 
     func fullResults(for query: String, lastEditWasDeletion: Bool) async -> (items: [ChromeUI.PaletteItem], inline: String?) {
         let q = self.query(query, deletion: lastEditWasDeletion)
-        return convert(await services.engine.fullResults(q))
+        let isPrivate = controller?.isPrivateWindow ?? true || services.privateProfiles.contains(services.store.currentSpace.profileID)
+        return convert(await services.engine.fullResults(q, remoteSuggestions: SearchEngine.suggestionsEnabled && !isPrivate))
     }
 
     private func convert(_ results: [PaletteResult]) -> (items: [ChromeUI.PaletteItem], inline: String?) {

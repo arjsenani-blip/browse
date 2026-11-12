@@ -65,7 +65,7 @@ enum DebugSnapshot {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             if let k = args.firstIndex(of: "--palette") {
-                services.frontController?.openPalette(.command)
+                services.frontController?.openPalette(args.contains("--newtab") ? .newTab : .command)
                 let q = k + 1 < args.count ? args[k + 1] : ""
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     services.frontController?.debugSetPaletteQuery(q)

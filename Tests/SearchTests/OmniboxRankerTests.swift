@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import BrowserCore
 import Persistence
-import Search
+@testable import Search
 
 private func u(_ s: String) -> URL { URL(string: s)! }
 private let now = Date(timeIntervalSince1970: 1_790_000_000)
@@ -115,7 +115,7 @@ private func hit(_ url: String, _ title: String?, frecency: Double = 50, visits:
         let last = r.last
         #expect(last?.section == .search)
         #expect(last?.title == "Search the web for \u{201C}swift concurrency\u{201D}")
-        #expect(last?.url?.absoluteString == "https://duckduckgo.com/?q=swift%20concurrency")
+        #expect(last?.url?.absoluteString == "https://www.google.com/search?q=swift%20concurrency")
         #expect(!r.contains { $0.id == "goto" })
     }
 
@@ -125,7 +125,7 @@ private func hit(_ url: String, _ title: String?, frecency: Double = 50, visits:
         #expect(r[0].action == .goTo(u("https://example.org/path")))
         if case .search(let text, let url) = r[1].action {
             #expect(text == "example.org/path")
-            #expect(url?.host() == "duckduckgo.com")
+            #expect(url?.host() == "www.google.com")
         } else { Issue.record("expected search action") }
     }
 
@@ -256,5 +256,71 @@ private func hit(_ url: String, _ title: String?, frecency: Double = 50, visits:
         #if !DEBUG
         #expect(best < .milliseconds(16), "quick pass: \(best)")
         #endif
+    }
+}
+
+extension OmniboxRankerTests {
+    // Regression: from the user's real history. A long sign-in redirect URL with very high frecency
+    // fuzzy-matched scattered letters of unrelated queries and won the default row.
+    static let signIn = "https://accounts.google.com/v3/signin/identifier?continue=https://mail.google.com/mail/?service%3Dmail%26flowName%3DGlifWebSignIn%26flowEntry%3DAccountChooser%26ec%3Dasw-gmail-globalnav-signin&uj=gafb-gmail_asw-globalnav-en&flowName=GlifWebSignIn&flowEntry=ServiceLogin&dsh=S504461087:1794350680043449"
+    var realHistory: [HistoryHit] {
+        [hit(Self.signIn, "Gmail", frecency: 21_039, visits: 8, typed: 3),
+         hit("https://gmail.com/", "Inbox - Gmail", frecency: 20_000, visits: 30, typed: 5),
+         hit("https://classroom.google.com/", "Classes", frecency: 18_000, visits: 10, typed: 2),
+         hit("https://www.cfr.org/backgrounders/what-nato", "What Is NATO? | Council on Foreign Relations", frecency: 900)]
+    }
+
+    @Test(arguments: ["symbo lab", "browser tester", "chrome web store", "weather tomorrow", "best laptops 2026", "how to cook rice"])
+    func unrelatedQueryDefaultsToSearch(_ text: String) {
+        let r = rank(text, hits: realHistory)
+        #expect(r.first?.section == .search, "\(text) → \(r.first?.title ?? "nil")")
+        #expect(!r.contains { $0.url?.absoluteString == Self.signIn }, "\(text) matched the sign-in URL")
+    }
+
+    @Test func staleAdaptiveChoiceDoesNotResurfaceUnrelatedPage() {
+        // The bad pick was recorded as an input choice; it must not keep winning.
+        let inputs = [InputMatch(input: "symbo lab", url: u(Self.signIn), useCount: 1)]
+        let r = rank("symbo lab", hits: realHistory, inputs: inputs)
+        #expect(r.first?.section == .search)
+    }
+
+    @Test func strongMatchesStillLead() {
+        #expect(rank("gma", hits: realHistory).first?.url?.host() == "gmail.com")
+        #expect(rank("classroom", hits: realHistory).first?.url?.host() == "classroom.google.com")
+        #expect(rank("nato", hits: realHistory).first?.url?.host() == "www.cfr.org")
+    }
+
+    @Test func wholeWordTitleMatchLeads() {
+        let r = rank("how to cook rice", hits: [hit("https://recipes.example/rice", "How to Cook Rice Perfectly", frecency: 10)])
+        #expect(r.first?.section == .history)
+        #expect(r.last?.id == "search")
+    }
+
+    @Test func midWordMatchFollowsSearch() {
+        // "ate" sits inside "update": shown, but not the default.
+        let r = rank("ate", hits: [hit("https://news.example/update", "Daily Update", frecency: 500)])
+        #expect(r.first?.id == "search")
+        #expect(r.contains { $0.section == .history })
+    }
+
+    @Test func commandAliasDoesNotHijackEnter() {
+        let cmd = PaletteCommand(id: "addExtension", title: "Add Extension", aliases: ["chrome web store"])
+        #expect(rank("chrome web store", commands: [cmd]).first?.id == "search")
+        #expect(rank("add ext", commands: [cmd]).first?.commandID == "addExtension")
+    }
+
+    @Test func engineSuggestionsFollowSearchRow() {
+        let q = PaletteQuery(text: "weath")
+        let r = ranker.rank(q, snapshot: .empty, suggestions: ["weath", "weather", "Weather tomorrow", "weather", "weather radar"])
+        #expect(r.map(\.title) == ["Search the web for \u{201C}weath\u{201D}", "weather", "Weather tomorrow", "weather radar"])
+        #expect(r[1].action == .search("weather", URL(string: "https://www.google.com/search?q=weather")))
+    }
+
+    @Test func suggestionParserHandlesOpenSearchAndCharsets() {
+        let json = Data(#"["caf",["café","cafe near me"],[],{"google:suggesttype":[]}]"#.utf8)
+        #expect(SearchSuggester.parse(json, encoding: "utf-8") == ["café", "cafe near me"])
+        let latin1 = "[\"caf\",[\"café\"]]".data(using: .isoLatin1)!
+        #expect(SearchSuggester.parse(latin1, encoding: "ISO-8859-1") == ["café"])
+        #expect(SearchSuggester.parse(Data("nope".utf8), encoding: nil).isEmpty)
     }
 }

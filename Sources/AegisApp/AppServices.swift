@@ -45,7 +45,7 @@ final class AppServices {
         let sleepMinutes = UserDefaults.standard.double(forKey: "sleepMinutes")
         if sleepMinutes > 0 { runtime.hibernation.idleTimeout = sleepMinutes * 60 }
         history = try? HistoryStore(url: AppPaths.support.appending(path: "history.sqlite"))
-        engine = PaletteEngine(history: history)
+        engine = PaletteEngine(history: history, suggester: SearchSuggester())
         if let saved = UserDefaults.standard.data(forKey: "privacy"), let p = try? JSONDecoder().decode(CodablePrivacy.self, from: saved) {
             privacy = p.settings
         }

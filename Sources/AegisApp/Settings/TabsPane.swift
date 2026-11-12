@@ -48,8 +48,16 @@ struct TabsPane: View {
                     .fixedSize()
                 }
                 Divider()
-                SettingsRow(title: "Suggestions", help: "From your tabs and history only.", systemImage: "text.magnifyingglass") {
-                    SettingsBadge(text: "On this Mac", tint: .secondary)
+                SettingsRow(title: "Search suggestions",
+                            help: model.searchEngine.suggestTemplate == nil
+                                ? "\(model.searchEngine.name) has none; tabs and history still suggest."
+                                : "Sends what you type to \(model.searchEngine.name). Never in private windows.",
+                            systemImage: "text.magnifyingglass") {
+                    Toggle("Search suggestions", isOn: $model.searchSuggestions)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .disabled(model.searchEngine.suggestTemplate == nil)
                 }
                 Divider()
                 SettingsRow(title: "Command palette", help: "Tabs, history and commands.", systemImage: "command") {

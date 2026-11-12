@@ -372,6 +372,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         if mode == .navigate { initial = store.selectedTab.flatMap { runtime.tab($0.id)?.url?.absoluteString } ?? "" }
         if mode == .command { initial = ">" }
         palette.model.placeholder = mode == .newTab ? "Search or enter address" : "Search tabs, history, or type a command"
+        let engine = SearchEngine.current
+        let remote = SearchEngine.suggestionsEnabled && engine.suggestTemplate != nil
+            && !isPrivateWindow && !app.privateProfiles.contains(store.currentSpace.profileID)
+        palette.model.footnote = remote ? "Suggestions from \(engine.name)" : "Results stay on this Mac"
         card.setEmptyStateHidden(true)
         palette.onClose = { [weak self] in self?.card.setEmptyStateHidden(false) }
         palette.show(in: window, over: card, dataSource: source, initialText: initial, hue: windowSpace.accentHue)

@@ -73,6 +73,8 @@ public final class PaletteModel {
     }
     private var effectiveQuery: String { commandsOnly ? ">" + query : query }
     public var placeholder = "Search tabs, history, or type a command"
+    /// Privacy note in the footer; names the engine when suggestions leave the Mac.
+    public var footnote = "Results stay on this Mac"
     weak var dataSource: PaletteDataSource?
     var onDismiss: (() -> Void)?
     var banner: PaletteBanner?
@@ -226,7 +228,7 @@ struct PaletteView: View {
             Divider()
             HStack(spacing: 6) {
                 Image(systemName: "lock.shield").font(.system(size: 11))
-                Text("Results stay on this Mac")
+                Text(model.footnote)
                 Spacer()
                 Text("↑↓ to move · ↵ to open · ⌘↵ new tab · esc")
             }

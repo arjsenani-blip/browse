@@ -185,6 +185,12 @@ enum URLText {
         return h
     }
 
+    /// Host (no "www.") and path, without query or fragment: what a URL is about.
+    static func hostAndPath(_ url: URL) -> String {
+        let path = url.path(percentEncoded: false)
+        return host(url) + (path == "/" ? "" : path)
+    }
+
     static func display(_ url: URL) -> String {
         var s = url.absoluteString
         if let r = s.range(of: "://") { s = String(s[r.upperBound...]) }

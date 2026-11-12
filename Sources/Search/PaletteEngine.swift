@@ -11,11 +11,14 @@ import Persistence
 public final class PaletteEngine: Sendable {
     public let history: HistoryStore?
     public let ranker: OmniboxRanker
+    /// nil disables engine suggestions (tests).
+    public let suggester: SearchSuggester?
     private let snapshot = Mutex(HistorySnapshot.empty)
 
-    public init(history: HistoryStore?, ranker: OmniboxRanker = OmniboxRanker()) {
+    public init(history: HistoryStore?, ranker: OmniboxRanker = OmniboxRanker(), suggester: SearchSuggester? = nil) {
         self.history = history
         self.ranker = ranker
+        self.suggester = suggester
     }
 
     /// Reloads the cached history slice (quick-index candidates + adaptive input history).
@@ -37,13 +40,17 @@ public final class PaletteEngine: Sendable {
         ranker.rank(query, snapshot: historySnapshot)
     }
 
-    public func fullResults(_ query: PaletteQuery, ftsLimit: Int = 50) async -> [PaletteResult] {
+    /// `remoteSuggestions` asks the search engine too (never in private windows).
+    public func fullResults(_ query: PaletteQuery, ftsLimit: Int = 50, remoteSuggestions: Bool = false) async -> [PaletteResult] {
         let (scope, text) = query.parsed
-        guard let history, !text.isEmpty, scope == .all || scope == .history else {
+        guard !text.isEmpty, scope == .all || scope == .history else {
             return quickResults(query)
         }
-        let hits = (try? await history.search(text, limit: ftsLimit)) ?? []
+        let suggester = scope == .all && remoteSuggestions ? self.suggester : nil
+        async let suggestions = suggester?.suggestions(for: text) ?? []
+        let hits = (try? await history?.search(text, limit: ftsLimit)) ?? []
+        let list = await suggestions
         if Task.isCancelled { return quickResults(query) }
-        return ranker.rank(query, snapshot: historySnapshot, extraHits: hits)
+        return ranker.rank(query, snapshot: historySnapshot, extraHits: hits, suggestions: list)
     }
 }

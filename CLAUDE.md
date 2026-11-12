@@ -33,7 +33,7 @@ scripts/             bundle.sh (assemble + codesign .app), bench-memory.sh, upda
 - `scripts/bench-memory.sh` → idle footprint of the app process after launch + 10 s. **Budget: < 150 MB app process idle** (WebKit child processes reported separately).
 
 ## Rules
-- **Zero telemetry.** The only network requests the app itself makes: filter-list updates (easylist.to, secure.fanboy.co.uk), DoH lookups to the chosen resolver, site favicons, and `clients2.google.com` / `clients2.googleusercontent.com` **only when the user installs an extension**. No analytics, no remote search suggestions unless the user opts in.
+- **Zero telemetry.** The only network requests the app itself makes: filter-list updates (easylist.to, secure.fanboy.co.uk), DoH lookups to the chosen resolver, site favicons, and `clients2.google.com` / `clients2.googleusercontent.com` **only when the user installs an extension**. No analytics. Search suggestions (what's typed in the palette, sent cookieless to the chosen engine's OpenSearch endpoint) are on by default at the user's request (2026-11-12), toggle in Settings → Search, never in private windows. Default engine: Google.
 - Glass (`NSGlassEffectView` / visual effect) only on sidebar, palette, HUDs — never on tab rows or page content. Respect Reduce Transparency / Reduce Motion / Increase Contrast.
 - Design tokens in `ChromeUI/Tokens.swift` match `docs/research/05-design-language.md`; don't hard-code window radii.
 - Anything requiring a restricted entitlement (passkeys) is behind a runtime availability check and degrades gracefully in ad-hoc builds.

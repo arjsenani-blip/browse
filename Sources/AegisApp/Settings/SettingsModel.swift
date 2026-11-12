@@ -80,6 +80,7 @@ final class SettingsModel {
     }
 
     var searchEngine: SearchEngine = SearchEngine.current { didSet { SearchEngine.current = searchEngine } }
+    var searchSuggestions = SearchEngine.suggestionsEnabled { didSet { SearchEngine.suggestionsEnabled = searchSuggestions } }
 
     // Spaces pane selection
     var selectedSpaceID: UUID?
