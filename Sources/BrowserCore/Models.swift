@@ -188,13 +188,6 @@ public struct ArchivedTab: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
-/// A folder in a space's Pinned section. Its tabs are pinned tabs.
-///
-/// Folders can nest: `parentID` names the containing folder (nil = top level).
-/// `position` is the folder's slot among its siblings: for a top-level folder,
-/// among the loose pinned tabs and other top-level folders; for a subfolder,
-/// among its parent's tabs and subfolders. (The sidebar currently renders one
-/// level; nesting support in the model is ready for the UI. See docs/subfolders.md.)
 /// Two to four tabs of one space shown side by side (or stacked) in one window.
 public struct SplitGroup: Codable, Sendable, Identifiable, Equatable {
     public static let maxPanes = 4
@@ -224,6 +217,13 @@ public struct SplitGroup: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
+/// A folder in a space's Pinned section. Its tabs are pinned tabs.
+///
+/// Folders can nest: `parentID` names the containing folder (nil = top level).
+/// `position` is the folder's slot among its siblings: for a top-level folder,
+/// among the loose pinned tabs and other top-level folders; for a subfolder,
+/// among its parent's tabs and subfolders. (The sidebar currently renders one
+/// level; nesting support in the model is ready for the UI. See docs/subfolders.md.)
 public struct Folder: Codable, Sendable, Identifiable, Equatable {
     public var id: UUID
     public var name: String

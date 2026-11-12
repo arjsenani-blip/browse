@@ -216,7 +216,9 @@ public final class BrowserStore {
                 return f }
             // …then open a slot in the new one.
             let siblings = sp.folders.filter { $0.parentID == parent && $0.id != id }
-            let slot = min(max(0, position ?? siblings.count), siblings.count + (parent == nil ? sp.pinned.count : 0))
+            // Slots count the scope's tabs too: loose pinned tabs at the top level, the parent's tabs inside a folder.
+            let tabCount = parent.map { p in sp.folders.first { $0.id == p }?.tabs.count ?? 0 } ?? sp.pinned.count
+            let slot = min(max(0, position ?? siblings.count), siblings.count + tabCount)
             sp.folders = sp.folders.map { var f = $0
                 if f.id != id, f.parentID == parent, f.position >= slot { f.position += 1 }
                 return f }
@@ -294,9 +296,10 @@ public final class BrowserStore {
         let children = space.subfolders(of: id)
         mutateSpace(space.id) { sp in
             sp.folders.removeAll { $0.id == id }
-            // Make room in the parent's scope, then hoist the subfolders into the slot.
+            // Resize the folder's slot in the parent's scope to fit its subfolders (closing it if there are none),
+            // then hoist them into it.
             sp.folders = sp.folders.map { var f = $0
-                if f.parentID == parent, f.position > folder.position { f.position += max(0, children.count - 1) }
+                if f.parentID == parent, f.position > folder.position { f.position += children.count - 1 }
                 return f }
             for (offset, child) in children.enumerated() {
                 if let ci = sp.folders.firstIndex(where: { $0.id == child.id }) {
