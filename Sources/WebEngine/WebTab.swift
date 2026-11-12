@@ -148,6 +148,10 @@ public final class WebTab: NSObject {
     /// Runs the reader extraction in the isolated reader world.
     public func extractArticle() async -> ReaderArticle? {
         guard let view = webView else { return nil }
+        let loaded = (try? await view.evaluateJavaScript("typeof Readability === 'function'", in: nil, contentWorld: Worlds.reader)) as? Bool ?? false
+        if !loaded {
+            _ = try? await view.evaluateJavaScript(Bundled.readability + "\n" + Bundled.purify + "\n;true", in: nil, contentWorld: Worlds.reader)
+        }
         let result = try? await view.evaluateJavaScript(ReaderScript.extract, in: nil, contentWorld: Worlds.reader)
         guard let dict = result as? [String: Any], let content = dict["content"] as? String else { return nil }
         return ReaderArticle(title: dict["title"] as? String ?? title, byline: dict["byline"] as? String ?? "", site: dict["site"] as? String ?? "", html: content, url: url)

@@ -173,6 +173,88 @@ enum DebugSnapshot {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { services.frontController?.openLibrary(tab: args.contains("--media") ? .media : .downloads) }
             }
             if args.contains("--reader") { services.frontController?.toggleReader() }
+            if let k = args.firstIndex(of: "--loadbench"), let c = services.frontController {
+                // Loads each URL in the selected tab and reports time to the load finishing.
+                let urls = args[(k + 1)...].prefix(while: { !$0.hasPrefix("--") }).compactMap(URL.init(string:))
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    var total = 0.0
+                    for url in urls {
+                        guard let id = c.store.selectedTab?.id, let tab = services.runtime.tab(id) else { break }
+                        let t0 = Date()
+                        tab.load(url)
+                        try? await Task.sleep(for: .milliseconds(100))
+                        while tab.isLoading && Date().timeIntervalSince(t0) < 30 { try? await Task.sleep(for: .milliseconds(20)) }
+                        let ms = Date().timeIntervalSince(t0) * 1000
+                        total += ms
+                        let nav = try? await tab.webView?.callAsyncJavaScript("const n = performance.getEntriesByType('navigation')[0]; return n ? [n.responseStart, n.domContentLoadedEventEnd, n.loadEventEnd].map(Math.round).join('/') : ''", arguments: [:], in: nil, contentWorld: .page)
+                        print(String(format: "LOADBENCH %6.0f ms %@  ttfb/dcl/load=%@", ms, url.host() ?? "", "\(nav ?? "")")); fflush(stdout)
+                    }
+                    print(String(format: "LOADBENCH total %.0f ms; refresh x%d, %.1f ms main thread, max %.2f ms", total,
+                                 BrowserWindowController.refreshCount, BrowserWindowController.refreshTime * 1000,
+                                 BrowserWindowController.refreshMax * 1000)); fflush(stdout)
+                }
+            }
+            if let k = args.firstIndex(of: "--returnafter"), k + 1 < args.count, let wait = Double(args[k + 1]), let c = services.frontController {
+                // Leave the first opened tab in the background for `wait` seconds, then go back to it.
+                Task {
+                    try? await Task.sleep(for: .seconds(4))
+                    let selected = c.store.selectedTab?.id
+                    guard let id = c.store.currentSpace.allTabs.first(where: { $0 != selected && services.runtime.existingTab($0)?.isAwake == true }) else {
+                        print("RETURN no background tab"); fflush(stdout); return
+                    }
+                    if args.contains("--killgpu"), let pool = services.runtime.tab(id)?.webView?.configuration.processPool,
+                       let gpu = (pool.value(forKey: "_gpuProcessIdentifier") as? NSNumber)?.int32Value, gpu > 0 {
+                        kill(gpu, SIGKILL)
+                        print("RETURN killed GPU process \(gpu)"); fflush(stdout)
+                    }
+                    try? await Task.sleep(for: .seconds(wait))
+                    let before = services.runtime.tab(id)?.webView
+                    print("RETURN after \(wait)s awake=\(before != nil) sleeping=\(services.store.tabs[id]?.isSleeping ?? false)"); fflush(stdout)
+                    c.select(id)
+                    try? await Task.sleep(for: .seconds(3))
+                    if let wid = c.window?.windowNumber { print("RETURN window \(wid)"); fflush(stdout) }
+                    let web = services.runtime.tab(id)?.webView
+                    let r = try? await web?.callAsyncJavaScript("return [document.readyState, document.body ? document.body.innerText.length : -1].join(' ')", arguments: [:], in: nil, contentWorld: .page)
+                    print("RETURN shown sameView=\(web === before) snapshotCovering=\(c.debugSnapshotCovering) page=\(r.map { "\($0)" } ?? "nil") inWindow=\(web?.window != nil) frame=\(web?.frame ?? .zero)"); fflush(stdout)
+                }
+            }
+            if args.contains("--killbg"), let c = services.frontController {
+                // Kill a background tab's WebContent process (as macOS does under memory pressure), then return to it.
+                Task {
+                    try? await Task.sleep(for: .seconds(4))
+                    let selected = c.store.selectedTab?.id
+                    guard let id = c.store.currentSpace.allTabs.first(where: { $0 != selected && services.runtime.existingTab($0)?.isAwake == true }),
+                          let web = services.runtime.tab(id)?.webView,
+                          let pid = (web.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value, pid > 0 else {
+                        print("KILLBG no awake background tab"); fflush(stdout); return
+                    }
+                    kill(pid, SIGKILL)
+                    print("KILLBG killed pid \(pid) for \(web.url?.absoluteString ?? "nil")"); fflush(stdout)
+                    try? await Task.sleep(for: .seconds(2))
+                    print("KILLBG after kill awake=\(services.runtime.tab(id)?.isAwake ?? false) sleeping=\(services.store.tabs[id]?.isSleeping ?? false)"); fflush(stdout)
+                    c.select(id)
+                    try? await Task.sleep(for: .seconds(4))
+                    let now = services.runtime.tab(id)?.webView
+                    let r = try? await now?.callAsyncJavaScript("return [location.href, document.readyState, document.body ? document.body.innerText.length : -1].join(' ')", arguments: [:], in: nil, contentWorld: .page)
+                    print("KILLBG shown sameView=\(now === web) page=\(r.map { "\($0)" } ?? "nil (white)")"); fflush(stdout)
+                }
+            }
+            if args.contains("--sleepwake"), let c = services.frontController, let id = c.store.selectedTab?.id {
+                // Hibernate the visible tab after it loads, then show it again (what returning to an old tab does).
+                Task {
+                    try? await Task.sleep(for: .seconds(3))
+                    print("SLEEPWAKE before url=\(services.runtime.tab(id)?.url?.absoluteString ?? "nil")"); fflush(stdout)
+                    await services.runtime.sleep(id)
+                    print("SLEEPWAKE slept awake=\(services.runtime.tab(id)?.isAwake ?? false) state=\(services.store.tabs[id]?.interactionState?.count ?? -1) bytes"); fflush(stdout)
+                    c.refresh()
+                    try? await Task.sleep(for: .seconds(4))
+                    let web = services.runtime.tab(id)?.webView
+                    let r = try? await web?.callAsyncJavaScript("return [location.href, document.readyState, document.body ? document.body.innerText.length : -1].join(' ')", arguments: [:], in: nil, contentWorld: .page)
+                    print("SLEEPWAKE window \(c.window?.windowNumber ?? 0)"); fflush(stdout)
+                    print("SLEEPWAKE after snapshotCovering=\(c.debugSnapshotCovering) loading=\(services.runtime.tab(id)?.isLoading ?? false) progress=\(services.runtime.tab(id)?.progress ?? -1) awake=\(web != nil) webURL=\(web?.url?.absoluteString ?? "nil") page=\(r.map { "\($0)" } ?? "nil")"); fflush(stdout)
+                }
+            }
             if let e = args.firstIndex(of: "--eval"), e + 1 < args.count,
                let c = services.frontController, let id = c.store.selectedTab?.id, let web = c.runtime.tab(id)?.webView {
                 Task {

@@ -230,7 +230,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// Debug counters for --loadbench: redraw count and main-thread time.
+    static var refreshCount = 0
+    static var refreshTime: CFTimeInterval = 0
+    static var refreshMax: CFTimeInterval = 0
+
     func refresh() {
+        let t0 = CACurrentMediaTime()
+        defer {
+            let dt = CACurrentMediaTime() - t0
+            Self.refreshCount += 1; Self.refreshTime += dt; Self.refreshMax = max(Self.refreshMax, dt)
+        }
         syncSpace()
         let space = windowSpace
         let visible = visibleSpaces
@@ -342,6 +352,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         return NowPlaying(tab: id, title: title, url: t.url, playing: t.mediaState == .playing, hasVideo: t.hasVideo,
                           artist: t.mediaArtist ?? "", artwork: t.mediaArtwork)
     }
+
+    var debugSnapshotCovering: Bool { card.isSnapshotCovering }
 
     private func showSelected() {
         guard let id = windowSpace.selected, store.tabs[id] != nil else {

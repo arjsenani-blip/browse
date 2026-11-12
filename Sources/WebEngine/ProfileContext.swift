@@ -15,7 +15,8 @@ public protocol ContentPolicy: AnyObject {
 }
 
 public struct PrivacySettings: Sendable, Equatable {
-    public var blockContent = true
+    /// Off by default: a content-blocker extension (uBlock Origin) does this better and runs once, not twice.
+    public var blockContent = false
     public var fingerprintProtection = true
     public var httpsOnly = true
     public var stripTrackingParameters = true
@@ -99,9 +100,9 @@ public final class ProfileContext {
         if settings.fingerprintProtection {
             userContent.addUserScript(WKUserScript(source: Farbling.source(seed: sessionSeed), injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
         }
-        // Reader libraries live only in the isolated reader world.
-        let reader = Bundled.readerable + "\n" + Bundled.readability + "\n" + Bundled.purify
-        userContent.addUserScript(WKUserScript(source: reader, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Worlds.reader))
+        // Only the 4 KB readerable check runs on every page; Readability and DOMPurify (~110 KB)
+        // are injected when Reader actually opens. Both live in the isolated reader world.
+        userContent.addUserScript(WKUserScript(source: Bundled.readerable, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Worlds.reader))
         userContent.addUserScript(WKUserScript(source: MediaScript.source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Worlds.media))
         if !Bundled.autofill.isEmpty {
             userContent.addUserScript(WKUserScript(source: Bundled.autofill, injectionTime: .atDocumentEnd, forMainFrameOnly: false, in: Worlds.autofill))

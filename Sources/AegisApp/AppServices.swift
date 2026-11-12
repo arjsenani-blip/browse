@@ -49,19 +49,32 @@ final class AppServices {
         if let saved = UserDefaults.standard.data(forKey: "privacy"), let p = try? JSONDecoder().decode(CodablePrivacy.self, from: saved) {
             privacy = p.settings
         }
+        // 2026-11: built-in blocking became opt-in (the user runs uBlock Origin). Turn it off once
+        // for existing installs; the Settings toggle still works afterwards.
+        if !UserDefaults.standard.bool(forKey: "blockingOptInMigrated") {
+            UserDefaults.standard.set(true, forKey: "blockingOptInMigrated")
+            privacy.blockContent = false
+            if let data = try? JSONEncoder().encode(CodablePrivacy(privacy)) { UserDefaults.standard.set(data, forKey: "privacy") }
+        }
     }
 
     func start() async {
         runtime.policy = blocking
         privacy.passkeysAvailable = PasskeyAuthorization.isEntitlementLikelyPresent
         blocking.onRulesChanged = { [weak self] in self?.runtime.reloadRules() }
-        await blocking.start()
+        // No filter-list download or 130k-rule compile unless built-in blocking is on.
+        if privacy.blockContent { await blocking.start() }
         do {
             try await dnsProxy.start()
-            runtime.proxyConfiguration = dnsProxy.proxyConfiguration
+            // AEGIS_NO_PROXY=1: benchmarking only (load times without the DoH proxy).
+            if ProcessInfo.processInfo.environment["AEGIS_NO_PROXY"] != "1" {
+                runtime.proxyConfiguration = dnsProxy.proxyConfiguration
+            }
         } catch {
             log.error("DoH proxy failed to start: \(error.localizedDescription, privacy: .public); using system DNS")
         }
+        // AEGIS_NO_BLOCK=1: benchmarking only (load times without content blocking).
+        if ProcessInfo.processInfo.environment["AEGIS_NO_BLOCK"] == "1" { privacy.blockContent = false }
         runtime.settings = privacy
         runtime.delegate = self
         runtime.extensionHost = extensions
@@ -216,6 +229,7 @@ final class AppServices {
     // MARK: Privacy
 
     func applyPrivacy() {
+        if privacy.blockContent && blocking.ruleLists.isEmpty { Task { await blocking.start(); runtime.reloadRules() } }
         runtime.settings = privacy
         if let data = try? JSONEncoder().encode(CodablePrivacy(privacy)) { UserDefaults.standard.set(data, forKey: "privacy") }
         controllers.forEach { $0.refresh() }

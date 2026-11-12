@@ -25,7 +25,7 @@ struct PrivacyPane: View {
         }
 
         SettingsCard(title: "Protection", help: "Applied to every tab in every space.") {
-            SettingsToggleRow(title: "Block ads and trackers", help: "EasyList and EasyPrivacy, compiled into WebKit rules.", systemImage: "hand.raised", isOn: $model.blockContent)
+            SettingsToggleRow(title: "Block ads and trackers", help: "Built in: EasyList and EasyPrivacy. Leave off if you use an extension like uBlock Origin.", systemImage: "hand.raised", isOn: $model.blockContent)
             Divider()
             SettingsToggleRow(title: "Fingerprint protection", help: "Adds noise to canvas, audio and WebGL; hides hardware details.", systemImage: "touchid", isOn: $model.fingerprint)
             Divider()

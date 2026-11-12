@@ -10,6 +10,10 @@ public final class ContentCard: NSView {
     private let snapshotView = NSImageView()
     private let emptyView = NSHostingSafeEmptyView()
     public private(set) var current: NSView?
+    /// When each page view last left the card. WebKit doesn't always repaint a page that sat
+    /// detached (and its process suspended) for minutes: it comes back white though fully loaded.
+    private var detachedAt: [ObjectIdentifier: CFTimeInterval] = [:]
+    private var trailing: NSLayoutConstraint?
 
     public override init(frame: NSRect) {
         super.init(frame: frame)
@@ -59,18 +63,28 @@ public final class ContentCard: NSView {
             fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
             clip.layer?.add(fade, forKey: "swap")
         }
+        if let old = current {
+            if detachedAt.count > 256 { detachedAt.removeAll() }
+            detachedAt[ObjectIdentifier(old)] = CACurrentMediaTime()
+        }
         current?.removeFromSuperview()
         current = view
         emptyView.isHidden = view != nil
         if let view {
             view.translatesAutoresizingMaskIntoConstraints = false
             clip.addSubview(view, positioned: .below, relativeTo: snapshotView)
+            let trailing = view.trailingAnchor.constraint(equalTo: clip.trailingAnchor)
+            self.trailing = trailing
             NSLayoutConstraint.activate([
                 view.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
-                view.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
+                trailing,
                 view.topAnchor.constraint(equalTo: clip.topAnchor),
                 view.bottomAnchor.constraint(equalTo: clip.bottomAnchor),
             ])
+            let key = ObjectIdentifier(view)
+            if let left = detachedAt.removeValue(forKey: key), CACurrentMediaTime() - left > 20 {
+                forceRepaint(view, trailing: trailing)
+            }
         }
         if let snapshot {
             snapshotView.image = snapshot
@@ -78,6 +92,20 @@ public final class ContentCard: NSView {
             snapshotView.alphaValue = 1
         } else {
             snapshotView.isHidden = true
+        }
+    }
+
+    /// True while the wake snapshot covers the page (debug harness).
+    public var isSnapshotCovering: Bool { !snapshotView.isHidden && snapshotView.alphaValue > 0 }
+
+    /// A one-pixel resize for a single frame: WebKit relayouts and repaints every tile, which
+    /// brings back a page that would otherwise stay blank. Invisible at the card's edge.
+    private func forceRepaint(_ view: NSView, trailing: NSLayoutConstraint) {
+        trailing.constant = -1
+        layoutSubtreeIfNeeded()
+        DispatchQueue.main.async { [weak self] in
+            guard self?.trailing === trailing else { return }
+            trailing.constant = 0
         }
     }
 
