@@ -236,6 +236,8 @@ public final class SidebarViewController: NSViewController {
         newTab.target = self; newTab.action = #selector(newMenuClicked(_:))
         newTab.setAccessibilityLabel("New tab, folder or space")
         libraryButton.target = self; libraryButton.action = #selector(libraryClicked)
+        // Downloads now live in the toolbar button left of Back; the Library stays on ⌥⌘J.
+        libraryButton.isHidden = true
         libraryBadge.font = .monospacedDigitSystemFont(ofSize: 9, weight: .bold)
         libraryBadge.textColor = .white
         libraryBadge.alignment = .center
@@ -342,7 +344,7 @@ public final class SidebarViewController: NSViewController {
                 downloadsButton.superview?.layoutSubtreeIfNeeded()
             }
         }
-        libraryBadge.isHidden = new.activeDownloads == 0
+        libraryBadge.isHidden = true
         libraryBadge.stringValue = "\(new.activeDownloads)"
         libraryBadge.layer?.backgroundColor = Tokens.accent(hue: new.accentHue).cgColor
 

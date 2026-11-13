@@ -340,7 +340,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         s.currentIndex = visible.firstIndex { $0.id == space.id } ?? 0
         let active = DownloadCenter.shared.active
         s.activeDownloads = active.count
-        s.downloadsShown = !active.isEmpty || downloadsPopover.isShown || (downloadsVisibleUntil.map { $0 > Date() } ?? false)
+        s.downloadsShown = true  // always visible left of Back (replaces the old footer Library icon)
         if !active.isEmpty {
             let total = active.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }
             let done = active.reduce(0.0) { $0 + $1.fractionCompleted * Double(max(0, $1.totalBytes)) }
