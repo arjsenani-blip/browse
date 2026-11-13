@@ -341,6 +341,8 @@ public final class PaletteController {
     private var source: PaletteDataSource?
     private var paletteView: NSView?
 
+    private var topGuideID: NSUserInterfaceItemIdentifier?
+
     public init() {}
     /// Called when the palette closes (the window restores what it hid).
     public var onClose: (() -> Void)?
@@ -369,6 +371,22 @@ public final class PaletteController {
         let hosting = NSHostingView(rootView: PaletteView(model: model))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(hosting)
+        // Pin the palette's top edge (not its center): results change height on
+        // every keystroke, and a centered panel would bob up and down as it
+        // grows from both ends. The guide keeps the top at ~16% of the window,
+        // tracking resizes, and yields in short windows so the bottom stays visible.
+        let topGuide = NSLayoutGuide()
+        content.addLayoutGuide(topGuide)
+        let guideID = NSUserInterfaceItemIdentifier("aegis.palette.top." + UUID().uuidString)
+        topGuide.identifier = guideID
+        topGuideID = guideID
+        NSLayoutConstraint.activate([
+            topGuide.topAnchor.constraint(equalTo: content.topAnchor),
+            topGuide.heightAnchor.constraint(equalTo: content.heightAnchor, multiplier: 0.16).withPriority(.defaultHigh),
+            topGuide.heightAnchor.constraint(greaterThanOrEqualToConstant: 0),
+            hosting.topAnchor.constraint(equalTo: topGuide.bottomAnchor),
+            hosting.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor),
+        ])
         NSLayoutConstraint.activate([
             scrim.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scrim.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -377,7 +395,6 @@ public final class PaletteController {
             hosting.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             hosting.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 12),
             hosting.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12),
-            hosting.centerYAnchor.constraint(equalTo: content.centerYAnchor, constant: -content.bounds.height * 0.12),
         ])
         host = scrim
         paletteView = hosting
@@ -394,6 +411,8 @@ public final class PaletteController {
         onClose?()
         let palette = paletteView
         paletteView = nil
+        let guideID = topGuideID
+        topGuideID = nil
         model.dataSource = nil
         source = nil
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -401,7 +420,14 @@ public final class PaletteController {
             host.animator().alphaValue = 0
             palette?.animator().alphaValue = 0
         }, completionHandler: {
-            MainActor.assumeIsolated { host.removeFromSuperview(); palette?.removeFromSuperview() }
+            MainActor.assumeIsolated {
+                if let content = host.superview {
+                    for guide in content.layoutGuides where guide.identifier == guideID {
+                        content.removeLayoutGuide(guide)
+                    }
+                }
+                host.removeFromSuperview(); palette?.removeFromSuperview()
+            }
         })
         window?.makeFirstResponder(window?.contentView)
     }
