@@ -1,10 +1,10 @@
 import Foundation
 import os
 
-/// Aegis's own password manager, backed by the macOS Keychain.
+/// Vane's own password manager, backed by the macOS Keychain.
 ///
 /// Apple offers no API for third-party browsers to read or write iCloud Keychain website
-/// passwords, so these are stored as `kSecClassInternetPassword` items owned by Aegis
+/// passwords, so these are stored as `kSecClassInternetPassword` items owned by Vane
 /// (see `docs/research/01-apple-passwords.md`).
 ///
 /// Listing APIs return credentials **without** passwords. Secrets are read only through

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import WebEngine
 
-/// Manual probe (AEGIS_PROBE=1): connection latency direct vs through the DoH proxy per resolver.
+/// Manual probe (VANE_PROBE=1): connection latency direct vs through the DoH proxy per resolver.
 @MainActor @Suite struct ProxyLatencyProbe {
     static let hosts = ["www.nytimes.com", "www.reddit.com", "news.ycombinator.com", "www.bbc.co.uk", "github.com",
                         "www.theverge.com", "stackoverflow.com", "www.apple.com"]
@@ -21,7 +21,7 @@ import Testing
         return out
     }
 
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["AEGIS_PROBE"] == "1"))
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VANE_PROBE"] == "1"))
     func probe() async throws {
         let direct = URLSessionConfiguration.ephemeral
         print("PROBE direct    ", (await timeAll(direct)).map { Int($0) })

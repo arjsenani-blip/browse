@@ -3,7 +3,7 @@ import QuartzCore
 import BrowserCore
 import ChromeUI
 
-/// Debug benchmark: `Aegis --snapshot x.png --swipe-benchmark`. Drives the
+/// Debug benchmark: `Vane --snapshot x.png --swipe-benchmark`. Drives the
 /// sidebar's swipe frame by frame on the display clock (a simulated finger,
 /// eased like a real flick), then a keyboard switch, and reports frame
 /// intervals and the main-thread time each frame cost.

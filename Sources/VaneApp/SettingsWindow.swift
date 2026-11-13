@@ -41,8 +41,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 780, height: 520)
         w.contentView = host
-        w.setFrameAutosaveName("AegisSettings")
-        if !w.setFrameUsingName("AegisSettings") { w.center() }
+        w.setFrameAutosaveName("VaneSettings")
+        if !w.setFrameUsingName("VaneSettings") { w.center() }
         w.delegate = self
         window = w
         self.model = model
@@ -54,7 +54,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
     // MARK: Debug snapshot
 
-    /// `Aegis --settings-snapshot out.png [--settings-pane spaces|all] [--dark]`
+    /// `Vane --settings-snapshot out.png [--settings-pane spaces|all] [--dark]`
     /// opens Settings, renders the window with `cacheDisplay` (no screen
     /// recording permission needed) and quits. With `all`, writes
     /// `out-<pane>.png` for every pane. Not reachable from the UI.

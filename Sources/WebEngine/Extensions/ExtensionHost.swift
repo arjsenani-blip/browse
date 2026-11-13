@@ -87,7 +87,7 @@ public final class ExtensionHost: NSObject {
     private var tabAdapters: [ObjectIdentifier: ExtensionTabAdapter] = [:]
     private var windowAdapters: [ObjectIdentifier: ExtensionWindowAdapter] = [:]
     var tabSnapshots: [ObjectIdentifier: TabSnapshot] = [:]
-    private let log = Logger(subsystem: "app.aegis", category: "extensions")
+    private let log = Logger(subsystem: "app.vane", category: "extensions")
 
     // MARK: App-supplied callbacks
 
@@ -205,7 +205,7 @@ public final class ExtensionHost: NSObject {
         return request.isEmpty && record.consented ? nil : request
     }
 
-    /// The Web Store ID for a store page URL, for the "Add to Aegis" banner.
+    /// The Web Store ID for a store page URL, for the "Add to Vane" banner.
     public func storeExtensionID(for url: URL) -> String? {
         ChromeWebStore.isStorePage(url) ? ChromeExtensionID.fromWebStoreURL(url) : nil
     }

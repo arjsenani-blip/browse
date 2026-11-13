@@ -149,7 +149,7 @@ struct ProxyCredential: Sendable {
     var headerValue: String { "Basic " + Data("\(username):\(password)".utf8).base64EncodedString() }
 
     static func random() -> ProxyCredential {
-        ProxyCredential(username: "aegis-" + randomToken(byteCount: 8), password: randomToken(byteCount: 32))
+        ProxyCredential(username: "vane-" + randomToken(byteCount: 8), password: randomToken(byteCount: 32))
     }
 
     private static func randomToken(byteCount: Int) -> String {
@@ -172,7 +172,7 @@ final class ProxyEngine: @unchecked Sendable {
     static let idleTimeout: TimeInterval = 300
     static let maxSessions = 1024
 
-    let queue = DispatchQueue(label: "aegis.dns-proxy")
+    let queue = DispatchQueue(label: "vane.dns-proxy")
     let log = Logger(subsystem: "app.aegis.browser", category: "EncryptedDNSProxy")
     let expectedAuthorization: String?
 
@@ -531,7 +531,7 @@ final class ProxySession: @unchecked Sendable {
         }
         if let expected = engine.expectedAuthorization {
             guard let given = request.proxyAuthorization, Self.constantTimeEqual(given, expected) else {
-                respondAndClose(407, "Proxy Authentication Required", extraHeaders: "Proxy-Authenticate: Basic realm=\"Aegis\"\r\n")
+                respondAndClose(407, "Proxy Authentication Required", extraHeaders: "Proxy-Authenticate: Basic realm=\"Vane\"\r\n")
                 return
             }
         }

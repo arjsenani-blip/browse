@@ -50,9 +50,9 @@ public final class ProfileContext {
         if let proxy { dataStore.proxyConfigurations = [proxy] }
         installScripts()
         reloadRules()
-        userContent.add(ScriptRelay(self), contentWorld: Worlds.autofill, name: "aegisAutofill")
-        userContent.add(ScriptRelay(self), contentWorld: Worlds.media, name: "aegisMedia")
-        userContent.add(ScriptRelay(self), contentWorld: .page, name: "aegisPasskey")
+        userContent.add(ScriptRelay(self), contentWorld: Worlds.autofill, name: "vaneAutofill")
+        userContent.add(ScriptRelay(self), contentWorld: Worlds.media, name: "vaneMedia")
+        userContent.add(ScriptRelay(self), contentWorld: .page, name: "vanePasskey")
     }
 
     func register(_ tab: WebTab, for view: WKWebView) { live[ObjectIdentifier(view)] = WeakTab(tab: tab) }

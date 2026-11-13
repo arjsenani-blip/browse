@@ -191,7 +191,7 @@ public final class WebTab: NSObject {
         guard let view = webView,
               let u = try? JSONEncoder().encode(username), let p = try? JSONEncoder().encode(password),
               let us = String(data: u, encoding: .utf8), let ps = String(data: p, encoding: .utf8) else { return }
-        view.evaluateJavaScript("window.__aegisFill && window.__aegisFill(\(us), \(ps));", in: nil, in: Worlds.autofill)
+        view.evaluateJavaScript("window.__vaneFill && window.__vaneFill(\(us), \(ps));", in: nil, in: Worlds.autofill)
     }
 
     // MARK: Observation

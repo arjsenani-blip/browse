@@ -7,7 +7,7 @@ import WebKit
 /// page can't observe or tamper with the script's globals; the `<style>` element itself lives in the
 /// shared DOM. Content rules already hide most selectors; this covers rules WebKit can't express.
 public enum CosmeticScript {
-    public static let contentWorldName = "AegisCosmetic"
+    public static let contentWorldName = "VaneCosmetic"
 
     /// The isolated world the script should run in.
     @MainActor
@@ -34,7 +34,7 @@ public enum CosmeticScript {
           const css = \(literal);
           const install = () => {
             const style = document.createElement('style');
-            style.setAttribute('data-aegis', '');
+            style.setAttribute('data-vane', '');
             style.textContent = css;
             (document.head || document.documentElement).appendChild(style);
           };

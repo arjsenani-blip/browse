@@ -6,7 +6,7 @@ import WebKit
 @MainActor
 @Suite(.serialized) struct WebKitCompileTests {
     func temporaryStore() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("aegis-cb-tests-\(UUID().uuidString)", isDirectory: true)
+        FileManager.default.temporaryDirectory.appendingPathComponent("vane-cb-tests-\(UUID().uuidString)", isDirectory: true)
     }
 
     @Test func compilesSmallListAndCaches() async throws {

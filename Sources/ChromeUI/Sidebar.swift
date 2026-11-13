@@ -752,7 +752,7 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.delegate = self
         table.target = self
         table.action = #selector(rowClicked)
-        table.registerForDraggedTypes([.aegisTab])
+        table.registerForDraggedTypes([.vaneTab])
         table.setDraggingSourceOperationMask(.move, forLocal: true)
         table.menuProvider = { [weak self] row in
             guard let self, row >= 0, row < self.rows.count else { return nil }
@@ -967,7 +967,7 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let id = tabID(in: r, row: row)
         let url = r.split?.first { $0.id == id }?.url ?? r.url
         let item = NSPasteboardItem()
-        item.setString(id.description, forType: .aegisTab)
+        item.setString(id.description, forType: .vaneTab)
         if let url { item.setString(url.absoluteString, forType: .string) }
         draggedTab = id
         return item
@@ -986,7 +986,7 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int, proposedDropOperation op: NSTableView.DropOperation) -> NSDragOperation {
-        guard info.draggingPasteboard.string(forType: .aegisTab) != nil else { return [] }
+        guard info.draggingPasteboard.string(forType: .vaneTab) != nil else { return [] }
         // Onto a folder row: into the folder (the whole row highlights).
         if op == .on, rows.indices.contains(row), case .folder = rows[row] { return .move }
         tableView.setDropRow(row, dropOperation: .above)
@@ -994,7 +994,7 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
-        guard let raw = info.draggingPasteboard.string(forType: .aegisTab), let uuid = UUID(uuidString: raw) else { return false }
+        guard let raw = info.draggingPasteboard.string(forType: .vaneTab), let uuid = UUID(uuidString: raw) else { return false }
         let id = TabID(uuid)
         if dropOperation == .on, rows.indices.contains(row), case .folder(let f) = rows[row] {
             delegate?.sidebarMoveTab(id, toFolder: f.id, index: nil)
@@ -1018,7 +1018,7 @@ final class SpacePageView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 }
 
 extension NSPasteboard.PasteboardType {
-    static let aegisTab = NSPasteboard.PasteboardType("app.aegis.tab")
+    static let vaneTab = NSPasteboard.PasteboardType("app.vane.tab")
 }
 
 /// Table that asks for a context menu per row.

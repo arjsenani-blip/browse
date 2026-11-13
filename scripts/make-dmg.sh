@@ -4,7 +4,7 @@
 # Usage: scripts/make-dmg.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-AEGIS_RELEASE=1 scripts/bundle.sh release
+VANE_RELEASE=1 scripts/bundle.sh release
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/Vane.app/Contents/Info.plist)
 DMG=build/Vane-$VERSION.dmg
 STAGE=$(mktemp -d)

@@ -2,13 +2,13 @@ import AuthenticationServices
 import Foundation
 import Security
 
-/// Passkey (WebAuthn) support for Aegis via iCloud Keychain.
+/// Passkey (WebAuthn) support for Vane via iCloud Keychain.
 ///
 /// Requires the managed entitlement `com.apple.developer.web-browser.public-key-credential`
 /// (requested from Apple; macOS 13.3+). Once the app is signed with it, **WebKit handles
 /// `navigator.credentials.create()/get()` natively inside `WKWebView`** — there is no
 /// per-request bridging to do. This type only covers the browser-level pieces:
-/// detecting the entitlement, asking the user to allow Aegis to use passkeys
+/// detecting the entitlement, asking the user to allow Vane to use passkeys
 /// (`requestAuthorizationForPublicKeyCredentials`), and listing platform credentials for
 /// conditional-UI style suggestions.
 ///
@@ -58,7 +58,7 @@ public final class PasskeyAuthorization: Sendable {
         return Self.map(manager.authorizationStateForPlatformCredentials)
     }
 
-    /// Prompts the user (once; the system remembers the answer) to let Aegis use passkeys.
+    /// Prompts the user (once; the system remembers the answer) to let Vane use passkeys.
     /// Returns immediately with the current state if already determined.
     public func requestAuthorization() async -> Status {
         guard let manager else { return .unavailableNoEntitlement }

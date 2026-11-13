@@ -1,27 +1,27 @@
 /*
- * Aegis autofill content script.
+ * Vane autofill content script.
  *
- * Injected as a WKUserScript into the isolated WKContentWorld "aegis-autofill"
+ * Injected as a WKUserScript into the isolated WKContentWorld "vane-autofill"
  * (never the page world), at document end, all frames. Because the world is isolated, the
- * page cannot see `window.__aegisFill` or read anything this script holds; DOM nodes and DOM
+ * page cannot see `window.__vaneFill` or read anything this script holds; DOM nodes and DOM
  * events are shared, so filled values and dispatched events reach the page normally.
  *
- * Messages posted to native via window.webkit.messageHandlers.aegisAutofill:
+ * Messages posted to native via window.webkit.messageHandlers.vaneAutofill:
  *   { type: 'formsFound', host, hasPassword, isTopFrame }
  *   { type: 'submitted',  host, username, password, isTopFrame }
  *
  * Native fills with (evaluateJavaScript in the same content world):
- *   window.__aegisFill(username, password)  -> true if something was filled
+ *   window.__vaneFill(username, password)  -> true if something was filled
  *
  * Fields with autocomplete="one-time-code" are ignored entirely: the system's
  * Security Code AutoFill handles them.
  */
 (function () {
   'use strict';
-  if (window.__aegisAutofillInstalled) return;
-  window.__aegisAutofillInstalled = true;
+  if (window.__vaneAutofillInstalled) return;
+  window.__vaneAutofillInstalled = true;
 
-  var handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.aegisAutofill;
+  var handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.vaneAutofill;
   if (!handler) return;
 
   var HOST = location.hostname;
@@ -202,8 +202,8 @@
     return filled;
   }
 
-  // Only visible inside the "aegis-autofill" content world.
-  Object.defineProperty(window, '__aegisFill', { value: fill, writable: false, configurable: false, enumerable: false });
+  // Only visible inside the "vane-autofill" content world.
+  Object.defineProperty(window, '__vaneFill', { value: fill, writable: false, configurable: false, enumerable: false });
 
   // ---- Submit capture ----
 

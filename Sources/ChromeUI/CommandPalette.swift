@@ -391,7 +391,7 @@ public final class PaletteController {
         // tracking resizes, and yields in short windows so the bottom stays visible.
         let topGuide = NSLayoutGuide()
         content.addLayoutGuide(topGuide)
-        let guideID = NSUserInterfaceItemIdentifier("aegis.palette.top." + UUID().uuidString)
+        let guideID = NSUserInterfaceItemIdentifier("vane.palette.top." + UUID().uuidString)
         topGuide.identifier = guideID
         topGuideID = guideID
         NSLayoutConstraint.activate([

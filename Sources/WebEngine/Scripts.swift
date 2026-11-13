@@ -17,10 +17,10 @@ enum Bundled {
 
 /// Isolated worlds: page scripts can't see or tamper with these.
 public enum Worlds {
-    @MainActor public static let reader = WKContentWorld.world(name: "aegis-reader")
-    @MainActor public static let cosmetic = WKContentWorld.world(name: "aegis-cosmetic")
-    @MainActor public static let autofill = WKContentWorld.world(name: "aegis-autofill")
-    @MainActor public static let media = WKContentWorld.world(name: "aegis-media")
+    @MainActor public static let reader = WKContentWorld.world(name: "vane-reader")
+    @MainActor public static let cosmetic = WKContentWorld.world(name: "vane-cosmetic")
+    @MainActor public static let autofill = WKContentWorld.world(name: "vane-autofill")
+    @MainActor public static let media = WKContentWorld.world(name: "vane-media")
 }
 
 /// Fingerprinting defenses. These must run in the page world to take effect,
@@ -127,7 +127,7 @@ enum ReaderScript {
 enum MediaScript {
     static let source = """
     (() => {
-      const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.aegisMedia;
+      const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.vaneMedia;
       if (!h) return;
       let last = null, timer = 0;
       const report = () => {
@@ -197,7 +197,7 @@ enum PasskeyShim {
           passkeyPlatformAuthenticator: false, userVerifyingPlatformAuthenticator: false });
       } catch (_) {}
       const tell = (op) => {
-        try { window.webkit.messageHandlers.aegisPasskey.postMessage({ type: 'passkeyBlocked', op, host: location.hostname }); } catch (_) {}
+        try { window.webkit.messageHandlers.vanePasskey.postMessage({ type: 'passkeyBlocked', op, host: location.hostname }); } catch (_) {}
       };
       for (const op of ['get', 'create']) {
         const orig = navigator.credentials[op] && navigator.credentials[op].bind(navigator.credentials);
@@ -215,7 +215,7 @@ enum PasskeyShim {
     """
 }
 
-/// Per-site fixes for sites that misbehave with Aegis's Safari-style user agent.
+/// Per-site fixes for sites that misbehave with Vane's Safari-style user agent.
 /// Empty for now. Google Docs used to need one, but with the current Safari
 /// version in the default user agent it is supported and renders sharply.
 /// (Version/26 renders its canvas at quarter resolution; dropping the Version

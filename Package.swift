@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "Aegis",
+    name: "Vane",
     platforms: [.macOS("15.4")],
     products: [
-        .executable(name: "Aegis", targets: ["AegisApp"]),
+        .executable(name: "Vane", targets: ["VaneApp"]),
     ],
     targets: [
         .executableTarget(
-            name: "AegisApp",
+            name: "VaneApp",
             dependencies: ["BrowserCore", "WebEngine", "ContentBlocking", "Persistence", "Search", "Credentials", "ChromeUI"]
         ),
         .target(name: "BrowserCore"),

@@ -65,7 +65,7 @@ extension AppearanceSettings.Mode {
     }
 }
 
-/// A miniature Aegis window: the space gradient behind a sidebar of tabs and
+/// A miniature Vane window: the space gradient behind a sidebar of tabs and
 /// an inset page card, scaled from the real settings.
 struct BrowserPreview: View {
     let theme: SpaceTheme
@@ -100,7 +100,7 @@ struct BrowserPreview: View {
                     .fill(ink.opacity(0.10))
                     .frame(height: 20)
                     .overlay(alignment: .leading) {
-                        Text("aegis.app").font(.system(size: appearance.fontSize * scale)).foregroundStyle(ink.opacity(0.6)).padding(.leading, 7)
+                        Text("vane.app").font(.system(size: appearance.fontSize * scale)).foregroundStyle(ink.opacity(0.6)).padding(.leading, 7)
                     }
                     .padding(.bottom, 6)
                 HStack(spacing: 5) {

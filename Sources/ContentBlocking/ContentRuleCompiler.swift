@@ -6,12 +6,12 @@ import WebKit
 /// keyed by the SHA-256 of their JSON, and keeping the last good set when a compile fails.
 @MainActor
 public final class ContentRuleCompiler {
-    public nonisolated static let identifierPrefix = "aegis-"
+    public nonisolated static let identifierPrefix = "vane-"
 
-    /// `~/Library/Application Support/Aegis/RuleLists`.
+    /// `~/Library/Application Support/Vane/RuleLists`.
     public static var defaultStoreURL: URL? {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("Aegis/RuleLists", isDirectory: true)
+            .appendingPathComponent("Vane/RuleLists", isDirectory: true)
     }
 
     /// The lists currently in effect (last successful `compile`).
@@ -53,7 +53,7 @@ public final class ContentRuleCompiler {
     ///
     /// All-or-nothing: if any list fails to compile, `current` (the last good set) is returned
     /// unchanged and `lastError` is set. On success, `current` is replaced and stale cached lists
-    /// with the Aegis prefix are removed from the store.
+    /// with the Vane prefix are removed from the store.
     @discardableResult
     public func compile(_ lists: [String]) async -> [WKContentRuleList] {
         do {
@@ -97,10 +97,10 @@ public final class ContentRuleCompiler {
         }
     }
 
-    /// Removes cached lists with the Aegis prefix that aren't in `keeping`.
+    /// Removes cached lists with the Vane prefix (or the pre-rename "aegis-" one) that aren't in `keeping`.
     public func prune(keeping: Set<String>) async {
         let ids = await store.availableIdentifiers() ?? []
-        for id in ids where id.hasPrefix(Self.identifierPrefix) && !keeping.contains(id) {
+        for id in ids where (id.hasPrefix(Self.identifierPrefix) || id.hasPrefix("aegis-")) && !keeping.contains(id) {
             try? await store.removeContentRuleList(forIdentifier: id)
         }
     }

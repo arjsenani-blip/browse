@@ -3,7 +3,7 @@ import WebKit
 import BrowserCore
 import WebEngine
 
-/// Development aid: `Aegis --snapshot out.png [--open URL] [--palette query]`
+/// Development aid: `Vane --snapshot out.png [--open URL] [--palette query]`
 /// renders the front window (chrome via cacheDisplay, the page via
 /// WKWebView.takeSnapshot composited into its frame) and quits. Needs no
 /// screen-recording permission. Not reachable from the UI.
@@ -118,7 +118,7 @@ enum DebugSnapshot {
             if args.contains("--demo-folders"), let c = services.frontController {
                 let sid = c.windowSpace.id
                 let closed = services.store.newFolder(in: sid, name: "Reading list")
-                let open = services.store.newFolder(in: sid, name: "Project Aegis")
+                let open = services.store.newFolder(in: sid, name: "Project Vane")
                 for u in ["https://github.com", "https://developer.apple.com/documentation/webkit"] {
                     services.store.moveTab(services.store.openTab(URL(string: u), select: false, in: sid), toFolder: open)
                 }

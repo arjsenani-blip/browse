@@ -35,7 +35,7 @@ final class AppServices {
     let dnsProxy = EncryptedDNSProxy(resolver: EncryptedDNSProxy.Resolver(rawValue: UserDefaults.standard.string(forKey: "dohResolver") ?? "") ?? .quad9)
     private var controllers: [BrowserWindowController] = []
     private var saveTimer: Timer?
-    private let log = Logger(subsystem: "app.aegis", category: "app")
+    private let log = Logger(subsystem: "app.vane", category: "app")
 
     init() {
         try? FileManager.default.createDirectory(at: AppPaths.support, withIntermediateDirectories: true)
@@ -66,15 +66,15 @@ final class AppServices {
         if privacy.blockContent { await blocking.start() }
         do {
             try await dnsProxy.start()
-            // AEGIS_NO_PROXY=1: benchmarking only (load times without the DoH proxy).
-            if ProcessInfo.processInfo.environment["AEGIS_NO_PROXY"] != "1" {
+            // VANE_NO_PROXY=1: benchmarking only (load times without the DoH proxy).
+            if ProcessInfo.processInfo.environment["VANE_NO_PROXY"] != "1" {
                 runtime.proxyConfiguration = dnsProxy.proxyConfiguration
             }
         } catch {
             log.error("DoH proxy failed to start: \(error.localizedDescription, privacy: .public); using system DNS")
         }
-        // AEGIS_NO_BLOCK=1: benchmarking only (load times without content blocking).
-        if ProcessInfo.processInfo.environment["AEGIS_NO_BLOCK"] == "1" { privacy.blockContent = false }
+        // VANE_NO_BLOCK=1: benchmarking only (load times without content blocking).
+        if ProcessInfo.processInfo.environment["VANE_NO_BLOCK"] == "1" { privacy.blockContent = false }
         runtime.settings = privacy
         runtime.delegate = self
         runtime.extensionHost = extensions

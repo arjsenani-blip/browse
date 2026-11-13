@@ -2,7 +2,7 @@
 
 Everything in `Sources/WebEngine/Extensions/` is self-contained and builds today. To turn it on, the lead
 adds about 60 lines to existing files, listed below. Nothing here touches the network until the user clicks
-**Add to Aegis**.
+**Add to Vane**.
 
 ## Files
 
@@ -10,7 +10,7 @@ adds about 60 lines to existing files, listed below. Nothing here touches the ne
 |---|---|
 | `CRXPackage.swift` | CRX2/CRX3 parser and signature verifier (`CRXPackage`, `CRXError`), plus `ChromeExtensionID` (ID validation, ID from public key, ID from a Web Store URL). |
 | `ChromeWebStore.swift` | `ChromeWebStore.downloadCRX(id:)`, `downloadURL(for:)`, `isStorePage(_:)`. Uses an ephemeral session with no cookies, cache or credentials, and follows redirects only to `clients2.google.com` and `clients2.googleusercontent.com`. |
-| `ExtensionInstaller.swift` | `ExtensionInstaller`: checks the ZIP, extracts it with `/usr/bin/ditto -x -k` into a staging folder, strips `_metadata`, then moves the folder into `~/Library/Application Support/Aegis/Extensions/<id>/`. Also holds `ExtensionManifest` (name, version, permissions, hosts, content-script matches, `__MSG_` localization) and `ZIPInspector`. |
+| `ExtensionInstaller.swift` | `ExtensionInstaller`: checks the ZIP, extracts it with `/usr/bin/ditto -x -k` into a staging folder, strips `_metadata`, then moves the folder into `~/Library/Application Support/Vane/Extensions/<id>/`. Also holds `ExtensionManifest` (name, version, permissions, hosts, content-script matches, `__MSG_` localization) and `ZIPInspector`. |
 | `ExtensionState.swift` | `InstalledExtension` (the record saved in `state.json`), `ExtensionPermissionRequest` (consent sheet contents, including `summary` lines), `ExtensionPermissionGrant`. |
 | `ExtensionHost.swift` | `@MainActor ExtensionHost`: owns the `WKWebExtensionController`, handles install/uninstall/enable, consent and grants, actions and commands, and implements the controller delegate. |
 | `ExtensionAdapters.swift` | `ExtensionTabAdapter` (a `WKWebExtensionTab` built from closures) and `ExtensionWindowAdapter` (a `WKWebExtensionWindow` built from closures, with an `init(window: NSWindow, …)` convenience). |
@@ -24,7 +24,7 @@ adds about 60 lines to existing files, listed below. Nothing here touches the ne
 let extensions: ExtensionHost
 
 // init(), after `runtime = TabRuntime(store: store)`
-extensions = ExtensionHost()            // default root: ~/Library/Application Support/Aegis/Extensions
+extensions = ExtensionHost()            // default root: ~/Library/Application Support/Vane/Extensions
 runtime.extensionHost = extensions      // see step 2
 
 // start(), after runtime.delegate = self
@@ -144,9 +144,9 @@ true:
 - Click: `extensions.performAction(for: id, tab: currentTab)`. This grants `activeTab`, then either fires
   `action.onClicked` or loads the popup and calls `presentActionPopup`.
 
-## 6. "Add to Aegis" on Web Store pages
+## 6. "Add to Vane" on Web Store pages
 
-The store's own Install button won't work in Aegis: it checks for Chrome and uses Chrome-only APIs. Show
+The store's own Install button won't work in Vane: it checks for Chrome and uses Chrome-only APIs. Show
 our own banner instead.
 
 ```swift

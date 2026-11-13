@@ -174,7 +174,7 @@ enum ImportFixtures {
     }
 
     static func tempDir() -> URL {
-        let url = FileManager.default.temporaryDirectory.appending(path: "aegis-import-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let url = FileManager.default.temporaryDirectory.appending(path: "vane-import-\(UUID().uuidString)", directoryHint: .isDirectory)
         try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }

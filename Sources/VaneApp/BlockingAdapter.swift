@@ -14,7 +14,7 @@ final class BlockingAdapter: ContentPolicy {
     private var cosmetic = CosmeticIndex()
     private let compiler = ContentRuleCompiler()
     private let manager = FilterListManager()
-    private let log = Logger(subsystem: "app.aegis", category: "blocking")
+    private let log = Logger(subsystem: "app.vane", category: "blocking")
     var onRulesChanged: (() -> Void)?
     private(set) var ruleCount = 0
 

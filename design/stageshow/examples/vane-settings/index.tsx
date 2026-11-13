@@ -4,7 +4,7 @@ import {
 import { Bar, Segmented, Stage, Toggle, Window, type Act } from '../../kit'
 import './settings.css'
 
-// Aegis Settings dashboard, design check for the native SwiftUI build.
+// Vane Settings dashboard, design check for the native SwiftUI build.
 // Sidebar nav in a floating panel; each page is a grid of cards. Two states:
 // Appearance (live preview card + controls) and Spaces (list + gradient editor).
 
@@ -32,7 +32,7 @@ const PRESETS: [string, string, string][] = [
   ['Midnight', '#333857', '#171729'], ['Forest', '#2e5747', '#122921'],
 ]
 
-export default function AegisSettings({ theme }: { theme?: 'light' | 'dark' }) {
+export default function VaneSettings({ theme }: { theme?: 'light' | 'dark' }) {
   return (
     <Stage<S> width={1040} height={660} initial={initial} poster={initial} script={script}
       accent="#0e8a7e" greys="cool" theme={theme} ground={['#bfe3dc', '#c9d8f2', '#e6dcf0']} className="as-stage">
@@ -97,12 +97,12 @@ function Preview({ a, b }: { a: string; b: string }) {
 function Appearance() {
   return (
     <div className="as-page">
-      <header><h1>Appearance</h1><p>How Aegis looks across every window.</p></header>
+      <header><h1>Appearance</h1><p>How Vane looks across every window.</p></header>
       <div className="as-grid as-grid--app">
         <Card title="Preview" className="as-span2">
           <Preview a="#9ee0d6" b="#5cb3c7" />
         </Card>
-        <Card title="Theme" help="Follow macOS, or keep Aegis light or dark.">
+        <Card title="Theme" help="Follow macOS, or keep Vane light or dark.">
           <Segmented items={['System', 'Light', 'Dark']} value={0} />
           <div className="as-row as-row--toggle"><span>Tint window with space color</span><Toggle on /></div>
         </Card>

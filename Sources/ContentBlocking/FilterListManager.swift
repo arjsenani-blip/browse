@@ -80,11 +80,11 @@ public actor FilterListManager {
         RemoteList(name: "easyprivacy.txt", url: URL(string: "https://easylist.to/easylist/easyprivacy.txt")!),
     ]
 
-    /// `~/Library/Application Support/Aegis/Filters`.
+    /// `~/Library/Application Support/Vane/Filters`.
     public static var defaultDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("Aegis/Filters", isDirectory: true)
+        return base.appendingPathComponent("Vane/Filters", isDirectory: true)
     }
 
     /// Bundled lists folder (`Resources/lists`).

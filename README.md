@@ -68,7 +68,7 @@ Measured with the same 5 sites open (`docs/benchmarks.md`):
 
 ## How it was built
 
-Research notes behind each decision are in `docs/research/`, design mockups (made with the stageshow skill) in `docs/design/` and `design/stageshow/examples/aegis-*`. Two adversarial QA agents and a critical checker reviewed the app; their joint list is in `docs/qa-round1.md`.
+Research notes behind each decision are in `docs/research/`, design mockups (made with the stageshow skill) in `docs/design/` and `design/stageshow/examples/vane-*`. Two adversarial QA agents and a critical checker reviewed the app; their joint list is in `docs/qa-round1.md`.
 
 ## Architecture
 

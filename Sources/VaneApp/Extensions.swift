@@ -4,7 +4,7 @@ import BrowserCore
 import WebEngine
 
 /// Chrome Web Store extensions, hosted by WebKit's WKWebExtension runtime.
-/// Nothing touches the network until the user chooses "Add to Aegis".
+/// Nothing touches the network until the user chooses "Add to Vane".
 extension AppServices {
     func extensionTab(_ tab: WebTab) -> ExtensionTabAdapter {
         extensions.adapter(for: tab,

@@ -10,7 +10,7 @@ import BrowserCore
 
 enum Fixture {
     static func tempDir() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appending(path: "aegis-ext-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let url = FileManager.default.temporaryDirectory.appending(path: "vane-ext-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
@@ -107,7 +107,7 @@ enum Fixture {
           "name": "__MSG_extName__",
           "version": "1.2.3",
           "default_locale": "en",
-          "description": "Aegis test extension",
+          "description": "Vane test extension",
           "permissions": ["storage", "tabs"],
           "host_permissions": ["*://*.example.com/*"],
           "background": { "service_worker": "background.js" },
@@ -115,7 +115,7 @@ enum Fixture {
           "content_scripts": [{ "matches": ["https://example.org/*"], "js": ["content.js"] }]
         }
         """,
-        "_locales/en/messages.json": #"{ "extName": { "message": "Aegis Test" } }"#,
+        "_locales/en/messages.json": #"{ "extName": { "message": "Vane Test" } }"#,
         "background.js": """
         chrome.runtime.onInstalled.addListener(() => {});
         const ns = (typeof chrome !== 'undefined' ? 'chrome' : '') + (typeof browser !== 'undefined' ? '+browser' : '');
@@ -124,7 +124,7 @@ enum Fixture {
           .then((v) => chrome.tabs.create({ url: 'https://example.org/?ns=' + encodeURIComponent(v.ns) }))
           .catch((e) => chrome.tabs.create({ url: 'https://example.org/?error=' + encodeURIComponent(String(e)) }));
         """,
-        "content.js": "document.documentElement.dataset.aegisTest = '1';",
+        "content.js": "document.documentElement.dataset.vaneTest = '1';",
         "_metadata/verified_contents.json": "[]",
     ]
 }
@@ -221,7 +221,7 @@ enum Fixture {
         defer { try? FileManager.default.removeItem(at: dir) }
         try Fixture.write(Fixture.mv3, to: dir)
         let m = try ExtensionManifest.read(from: dir)
-        #expect(m.name == "Aegis Test")
+        #expect(m.name == "Vane Test")
         #expect(m.version == "1.2.3")
         #expect(m.manifestVersion == 3)
         #expect(m.permissions == ["storage", "tabs"])
@@ -254,7 +254,7 @@ enum Fixture {
         let installer = ExtensionInstaller(root: root)
         let id = String(repeating: "b", count: 32)
         let manifest = try await installer.install(zip: try await Fixture.zip(Fixture.mv3), id: id)
-        #expect(manifest.name == "Aegis Test")
+        #expect(manifest.name == "Vane Test")
         let dir = installer.directory(for: id)
         #expect(FileManager.default.fileExists(atPath: dir.appending(path: "manifest.json").path))
         #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "_metadata").path))
@@ -276,7 +276,7 @@ enum Fixture {
 
 @Suite(.serialized) @MainActor struct ExtensionHostTests {
     @Test func delegateImplementsExpectedSelectors() {
-        let host = ExtensionHost(root: FileManager.default.temporaryDirectory.appending(path: "aegis-sel-\(UUID())"), persistent: false)
+        let host = ExtensionHost(root: FileManager.default.temporaryDirectory.appending(path: "vane-sel-\(UUID())"), persistent: false)
         for sel in [
             "webExtensionController:openWindowsForExtensionContext:",
             "webExtensionController:focusedWindowForExtensionContext:",
@@ -312,7 +312,7 @@ enum Fixture {
 
         let host = ExtensionHost(root: root, persistent: false)
         let installed = try await host.installUnpacked(from: src)
-        #expect(installed.name == "Aegis Test")
+        #expect(installed.name == "Vane Test")
         #expect(!installed.consented)
         // Not loaded before consent.
         #expect(host.context(for: installed.id) == nil)
@@ -387,7 +387,7 @@ enum Fixture {
             try await Task.sleep(for: .milliseconds(200))
             for _ in 0..<40 where view.isLoading { try await Task.sleep(for: .milliseconds(100)) }
             try await Task.sleep(for: .milliseconds(500))
-            return try await view.evaluateJavaScript("document.documentElement.dataset.aegisTest || 'none'") as? String
+            return try await view.evaluateJavaScript("document.documentElement.dataset.vaneTest || 'none'") as? String
         }
         let storeID = UUID()
         let normal = try await probe(WKWebsiteDataStore(forIdentifier: storeID))
@@ -474,9 +474,9 @@ enum Fixture {
     }
 }
 
-// MARK: - Real extensions (network; opt-in with AEGIS_NETWORK_TESTS=1)
+// MARK: - Real extensions (network; opt-in with VANE_NETWORK_TESTS=1)
 
-@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["AEGIS_NETWORK_TESTS"] != nil))
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["VANE_NETWORK_TESTS"] != nil))
 @MainActor struct RealExtensionTests {
     /// Minimal static DNR ruleset: does WebKit enforce it in a configured web view?
     @Test func staticDNRRuleBlocks() async throws {
@@ -522,7 +522,7 @@ enum Fixture {
         try await Task.sleep(for: .milliseconds(300))
         for _ in 0..<40 where view.isLoading { try await Task.sleep(for: .milliseconds(250)) }
         try await Task.sleep(for: .seconds(1))
-        let injected = try await view.evaluateJavaScript("document.documentElement.dataset.aegisTest || 'none'") as? String
+        let injected = try await view.evaluateJavaScript("document.documentElement.dataset.vaneTest || 'none'") as? String
         print("[dnr] content script on example.org ->", injected ?? "nil", "url:", view.url?.absoluteString ?? "")
         #expect(injected == "1")
         let r2 = try await view.callAsyncJavaScript(js, contentWorld: .page) as? String

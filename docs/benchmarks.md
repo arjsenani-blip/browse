@@ -2,17 +2,17 @@
 
 Method: `scripts/bench-compare.sh 25`. The same five sites (The Verge, Wikipedia, GitHub Trending, YouTube, Hacker News) are opened at launch and measured after 25 s. Memory is the summed `phys_footprint` of every process the browser uses (app, renderers/WebContent, GPU, network). Edge runs with a throwaway `--user-data-dir`. There are two rounds; round 2 is warm.
 
-| | Aegis | Microsoft Edge (Chromium) |
+| | Vane | Microsoft Edge (Chromium) |
 |---|---|---|
 | Launch to first window | 0.61–0.67 s | 1.04–1.27 s |
 | Total memory, 5 sites | 666–752 MB | 1,301–1,335 MB |
 | Processes | 9 | 21 |
 | App process alone | 54–57 MB | n/a |
 
-**Aegis launches about 40% faster and uses about 45% less memory with the same pages open.**
+**Vane launches about 40% faster and uses about 45% less memory with the same pages open.**
 
 Caveats:
-- Aegis blocks ads and trackers by default and Edge doesn't, so some of the memory gap is the blocker doing its job.
+- Vane blocks ads and trackers by default and Edge doesn't, so some of the memory gap is the blocker doing its job.
 - Page rendering and JavaScript speed match Safari, because both use the system WebKit. Safari wasn't measured, so the user's own Safari session and history weren't touched.
 
 Other measurements:

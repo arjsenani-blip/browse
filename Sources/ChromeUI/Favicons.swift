@@ -18,7 +18,7 @@ public final class Favicons {
 
     init() {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        folder = base.appending(path: "Aegis/Favicons", directoryHint: .isDirectory)
+        folder = base.appending(path: "Vane/Favicons", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     }
 

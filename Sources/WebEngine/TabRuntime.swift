@@ -29,7 +29,7 @@ public final class TabRuntime {
 
     private var pressureSource: DispatchSourceMemoryPressure?
     private var timer: Timer?
-    private let log = Logger(subsystem: "app.aegis", category: "hibernation")
+    private let log = Logger(subsystem: "app.vane", category: "hibernation")
 
     public init(store: BrowserStore) {
         self.store = store

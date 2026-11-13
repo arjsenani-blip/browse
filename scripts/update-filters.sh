@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Refreshes the filter lists bundled with Aegis (Sources/ContentBlocking/Resources/lists).
+# Refreshes the filter lists bundled with Vane (Sources/ContentBlocking/Resources/lists).
 # These are data files shipped inside the app so blocking works before the first
 # in-app update. EasyList / EasyPrivacy are dual-licensed GPLv3 / CC BY-SA 3.0
 # (see LICENSE-filter-lists.txt in the same folder).

@@ -1,6 +1,6 @@
-# Aegis Browser
+# Vane Browser
 
-A privacy-first, keyboard-driven macOS browser with an original sidebar design (vertical tabs, spaces, command palette). Research behind every decision is in `docs/research/`; the design direction is in `docs/design/` (built with the `stageshow` skill, sources in `design/stageshow/examples/aegis-*`).
+A privacy-first, keyboard-driven macOS browser with an original sidebar design (vertical tabs, spaces, command palette). Research behind every decision is in `docs/research/`; the design direction is in `docs/design/` (built with the `stageshow` skill, sources in `design/stageshow/examples/vane-*`).
 
 ## Stack (decided, see docs/research/02-stack.md)
 - Swift 6 (strict concurrency), AppKit shell, SwiftUI only for leaf views (palette, settings, onboarding). Stock `WKWebView`. Deployment target **macOS 15.4**.
@@ -12,7 +12,7 @@ A privacy-first, keyboard-driven macOS browser with an original sidebar design (
 ```
 Package.swift
 Sources/
-  AegisApp/          executable: AppDelegate, menus, window controller, wiring
+  VaneApp/          executable: AppDelegate, menus, window controller, wiring
   BrowserCore/       models: Tab, Space, Profile; session store; hibernation policy (pure Swift, unit-tested)
   WebEngine/         WKWebView factory, per-profile WKWebsiteDataStore, navigation policy, hibernation executor
   ContentBlocking/   filter lists -> WKContentRuleList compile/cache, cosmetic scripts, tracking-param stripping
@@ -27,7 +27,7 @@ scripts/             bundle.sh (assemble + codesign .app), bench-memory.sh, upda
 
 ## Build & test
 - `swift build` / `swift test` — must stay green.
-- `scripts/bundle.sh [debug|release]` → `build/Aegis.app` as **Aegis Dev** (bundle ID `app.aegis.browser.dev`, data in `~/Library/Application Support/Aegis Dev`): safe to run beside the installed app. Never run harness tests against the real identity.
+- `scripts/bundle.sh [debug|release]` → `build/Vane.app` as **Vane Dev** (bundle ID `app.aegis.browser.dev`, data in `~/Library/Application Support/Vane Dev`): safe to run beside the installed app. Never run harness tests against the real identity.
 - `scripts/install.sh` → real identity into /Applications; never quits a running copy.
 - `--swipe-benchmark` measures drag/release/keyboard paths (frame pacing needs the window visible; otherwise main-thread cost only).
 - `scripts/bench-memory.sh` → idle footprint of the app process after launch + 10 s. **Budget: < 150 MB app process idle** (WebKit child processes reported separately).
@@ -45,4 +45,4 @@ scripts/             bundle.sh (assemble + codesign .app), bench-memory.sh, upda
 - No http/https request interception in WKWebView → blocking is declarative (`WKContentRuleList`, 150k rules/list).
 - DoH goes through the in-app CONNECT proxy (`EncryptedDNSProxy`) set via `WKWebsiteDataStore.proxyConfigurations`; no HTTP/3 under a proxy, WebRTC UDP bypasses it.
 - Extensions: WKWebExtension supports MV3 + declarativeNetRequest; no blocking webRequest, offscreen, sidePanel, identity, native messaging. Extensions are off in private windows unless granted.
-- Debug harness: `Aegis --snapshot out.png [--open URLs] [--eval JS] [--palette q] [--library] …` (see DebugSnapshot.swift) renders windows without screen-recording permission.
+- Debug harness: `Vane --snapshot out.png [--open URLs] [--eval JS] [--palette q] [--library] …` (see DebugSnapshot.swift) renders windows without screen-recording permission.

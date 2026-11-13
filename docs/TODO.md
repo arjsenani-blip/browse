@@ -1,4 +1,4 @@
-# Aegis — status of requested fixes (updated 2026-11-10)
+# Vane — status of requested fixes (updated 2026-11-10)
 
 Done:
 - Crashes: window.open / target=_blank aborted the app (createNewPage configuration mismatch); favicon URL force unwrap.
@@ -20,4 +20,4 @@ Next (below the line from QA):
 - Delight: live favorites (unread badge, hover peek), freeze-space chip showing memory freed, blocked-count on the shield, time-of-day themes.
 - Run a QA round 2 (Rigor + Taste) on the new build.
 
-Dev workflow: `scripts/bundle.sh` builds "Aegis Dev" (bundle ID app.aegis.browser.dev, data in ~/Library/Application Support/Aegis Dev) so harness runs never touch the real session. `scripts/install.sh` builds the real identity and never quits a running Aegis.
+Dev workflow: `scripts/bundle.sh` builds "Vane Dev" (bundle ID app.aegis.browser.dev, data in ~/Library/Application Support/Vane Dev) so harness runs never touch the real session. `scripts/install.sh` builds the real identity and never quits a running Vane.

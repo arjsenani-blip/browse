@@ -193,7 +193,7 @@ import Testing
 
 @Suite @MainActor struct SessionSafetyTests {
     func tempDir() -> URL {
-        let d = FileManager.default.temporaryDirectory.appending(path: "aegis-session-\(UUID().uuidString)")
+        let d = FileManager.default.temporaryDirectory.appending(path: "vane-session-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }

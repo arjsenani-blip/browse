@@ -7,19 +7,19 @@ cd "$(dirname "$0")/.."
 WAIT=${1:-10}
 BUDGET_MB=150
 
-pkill -x Aegis 2>/dev/null || true
+pkill -x Vane 2>/dev/null || true
 open -n build/Vane.app
 sleep "$WAIT"
-PID=$(pgrep -x Aegis | head -1)
-[ -z "$PID" ] && { echo "Aegis is not running"; exit 1; }
+PID=$(pgrep -x Vane | head -1)
+[ -z "$PID" ] && { echo "Vane is not running"; exit 1; }
 
 mb() { footprint -p "$1" 2>/dev/null | awk '/phys_footprint:/ {v=$2; u=$3; if (u ~ /G/) v*=1024; if (u ~ /K/) v/=1024; printf "%.1f", v; exit}'; }
 APP_MB=$(mb "$PID")
-echo "Aegis app process (pid $PID): ${APP_MB} MB"
+echo "Vane app process (pid $PID): ${APP_MB} MB"
 
 TOTAL=0
 for child in $(pgrep -f "com.apple.WebKit" || true); do
-  # Only WebKit processes serving Aegis (their responsible pid is Aegis).
+  # Only WebKit processes serving Vane (their responsible pid is Vane).
   if [ "$(launchctl procinfo "$child" 2>/dev/null | awk '/responsible pid/ {print $NF; exit}')" = "$PID" ]; then
     C=$(mb "$child"); NAME=$(ps -o comm= -p "$child" | xargs basename)
     echo "  $NAME (pid $child): ${C} MB"

@@ -15,10 +15,10 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { Bar, Field, Popover, Stage, Text, Window, type Act, type Layout } from '../../kit'
-import '../aegis-glass/aegis.css'
+import '../vane-glass/vane.css'
 import './themed.css'
 
-// Aegis, direction A ("Glass"): an original sidebar browser for macOS 26.
+// Vane, direction A ("Glass"): an original sidebar browser for macOS 26.
 // A floating glass sidebar holds the address pill, a favorites grid, pinned
 // tabs and today's tabs; the page sits in an opaque inset card. The story is
 // the command palette: ⌘K, type "own", and the open tab, a history match and
@@ -53,7 +53,7 @@ const RESULTS: Result[] = [
   { section: 'Actions', icon: <BookOpen {...ic} />, title: 'Open in Reader', key: '⇧⌘R' },
 ]
 
-export default function AegisThemed({ theme }: { theme?: 'light' | 'dark' }) {
+export default function VaneThemed({ theme }: { theme?: 'light' | 'dark' }) {
   return (
     <Stage<S>
       width={960}

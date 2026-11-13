@@ -22,9 +22,9 @@ public enum SubmitDecision: Sendable, Equatable {
 }
 
 /// The seam WebEngine talks to. Kept free of WebKit: WebEngine translates
-/// `aegisAutofill` script messages into these calls, and injects the result of
-/// `fillValues(for:)` with `window.__aegisFill(username, password)` in the
-/// `aegis-autofill` content world.
+/// `vaneAutofill` script messages into these calls, and injects the result of
+/// `fillValues(for:)` with `window.__vaneFill(username, password)` in the
+/// `vane-autofill` content world.
 public protocol CredentialsCoordinating: Sendable {
     /// Called for `{type: "formsFound", host, hasPassword}`.
     func didFindForms(host: String) async -> [CredentialSuggestion]

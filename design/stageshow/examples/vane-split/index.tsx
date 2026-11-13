@@ -1,8 +1,8 @@
 import { ArrowLeft, ArrowRight, RotateCw, Plus, ShieldCheck, PanelLeft, Columns2, Home, Briefcase, FlaskConical } from 'lucide-react'
 import { Bar, Stage, Text, Window, type Act } from '../../kit'
-import '../aegis-glass/aegis.css'
-import '../aegis-themed/themed.css'
-import '../aegis-arc-plus/plus.css'
+import '../vane-glass/vane.css'
+import '../vane-themed/themed.css'
+import '../vane-arc-plus/plus.css'
 import './split.css'
 
 // Split view + sidebar collapse, before building it natively.
@@ -36,7 +36,7 @@ async function script(a: Act<S>) {
 
 const fav = (c: string, l: string) => <span className="ap-fav" style={{ background: c }}>{l}</span>
 
-export default function AegisSplit({ theme }: { theme?: 'light' | 'dark' }) {
+export default function VaneSplit({ theme }: { theme?: 'light' | 'dark' }) {
   return (
     <Stage<S> width={1040} height={620} initial={initial} poster={{ focus: 0, collapsed: false, peek: false }} script={script}
       accent="#0e8a7e" greys="cool" theme={theme} cursor={{ at: 'left-pane' }} className="ab-stage at-stage ap-stage as-stage">

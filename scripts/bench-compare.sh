@@ -1,5 +1,5 @@
 #!/bin/bash
-# Compares Aegis with a Chromium browser (Microsoft Edge, throwaway profile)
+# Compares Vane with a Chromium browser (Microsoft Edge, throwaway profile)
 # on the same five sites: time to first window, and total memory of every
 # process the browser uses (app + renderers/WebContent + GPU + network).
 # Usage: scripts/bench-compare.sh [settle_seconds=25]
@@ -36,24 +36,24 @@ run_edge() {
   kill $pids 2>/dev/null; sleep 3; kill -9 $pids 2>/dev/null; rm -rf "$profile"
 }
 
-run_aegis() {
-  pkill -x Aegis 2>/dev/null; sleep 1
+run_vane() {
+  pkill -x Vane 2>/dev/null; sleep 1
   local before=$(pgrep -f "com.apple.WebKit" | sort)
   local start=$(now_ms)
-  ./build/Vane.app/Contents/MacOS/Aegis --snapshot "$SCRATCH/a.png" --open "${URLS[@]}" --delay $((SETTLE + 5)) >/dev/null 2>&1 &
-  local launch=$(wait_window "Aegis" "$start")
+  ./build/Vane.app/Contents/MacOS/Vane --snapshot "$SCRATCH/a.png" --open "${URLS[@]}" --delay $((SETTLE + 5)) >/dev/null 2>&1 &
+  local launch=$(wait_window "Vane" "$start")
   sleep "$SETTLE"
-  local app=$(pgrep -x Aegis | head -1)
+  local app=$(pgrep -x Vane | head -1)
   local kids=$(comm -13 <(echo "$before") <(pgrep -f "com.apple.WebKit" | sort))
   local total=$(sum_pids $app $kids)
-  echo "aegis launch_ms=$launch total_mb=$total app_mb=$(mb $app) procs=$(( $(echo $kids | wc -w) + 1 ))"
-  pkill -x Aegis; sleep 2
+  echo "vane launch_ms=$launch total_mb=$total app_mb=$(mb $app) procs=$(( $(echo $kids | wc -w) + 1 ))"
+  pkill -x Vane; sleep 2
 }
 
 echo "Settle: ${SETTLE}s, sites: ${#URLS[@]}"
 for round in 1 2; do
   echo "--- round $round"
-  run_aegis
+  run_vane
   run_edge
 done
 rm -rf "$SCRATCH"

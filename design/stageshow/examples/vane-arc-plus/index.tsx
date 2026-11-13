@@ -1,7 +1,7 @@
 import { ArrowLeft, ArrowRight, RotateCw, Plus, ShieldCheck, Search, Pause, PictureInPicture2, ArrowDownToLine, Clock, Briefcase, Home, FlaskConical, Download } from 'lucide-react'
 import { Bar, Stage, Text, Window, type Act, type Layout } from '../../kit'
-import '../aegis-glass/aegis.css'
-import '../aegis-themed/themed.css'
+import '../vane-glass/vane.css'
+import '../vane-themed/themed.css'
 import './plus.css'
 
 // Taste-review mockup of proposed fixes over the shipped themed window:
@@ -16,7 +16,7 @@ async function script(a: Act<S>) { await a.wait(4000) }
 
 const fav = (c: string, l: string) => <span className="ap-fav" style={{ background: c }}>{l}</span>
 
-export default function AegisArcPlus({ theme }: { theme?: 'light' | 'dark' }) {
+export default function VaneArcPlus({ theme }: { theme?: 'light' | 'dark' }) {
   return (
     <Stage<S> width={1040} height={620} initial={initial} poster={initial} script={script}
       accent="#0e8a7e" greys="cool" theme={theme} className="ab-stage at-stage ap-stage">
@@ -48,7 +48,7 @@ function Scene({ s }: { s: S; layout: Layout }) {
         <div className="ab-cmd__list">
           <div className="ab-cmd__section">Jump back in</div>
           <div className="ab-cmd__item" data-active><span className="ab-cmd__icon">{fav('#ff6600', 'Y')}</span><span className="ab-cmd__title">Hacker News</span><span className="ab-cmd__meta">news.ycombinator.com</span><span className="ab-cmd__key">↵</span></div>
-          <div className="ab-cmd__item"><span className="ab-cmd__icon">{fav('#24292f', 'G')}</span><span className="ab-cmd__title">aegis-browser · Pull requests</span><span className="ab-cmd__meta">github.com</span></div>
+          <div className="ab-cmd__item"><span className="ab-cmd__icon">{fav('#24292f', 'G')}</span><span className="ab-cmd__title">vane-browser · Pull requests</span><span className="ab-cmd__meta">github.com</span></div>
           <div className="ab-cmd__item"><span className="ab-cmd__icon"><Clock size={15} strokeWidth={1.7} /></span><span className="ab-cmd__title">Understanding Ownership</span><span className="ab-cmd__meta">Yesterday</span></div>
         </div>
         <div className="ab-cmd__foot"><ShieldCheck size={13} strokeWidth={1.8} /><span>Results stay on this Mac</span></div>

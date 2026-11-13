@@ -1,4 +1,4 @@
-/* Aegis concept chrome. One token block per theme; every color below reads
+/* Vane concept chrome. One token block per theme; every color below reads
    from it. Glass only on the sidebar and the palette, never on the page. */
 .ab-stage .ss-stage {
   --gutter: 32px;

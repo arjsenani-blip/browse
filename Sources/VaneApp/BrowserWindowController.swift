@@ -131,7 +131,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = false
-        window.setFrameAutosaveName("AegisMainWindow")
+        window.setFrameAutosaveName("VaneMainWindow")
         window.minSize = NSSize(width: 640, height: 420)
         window.tabbingMode = .disallowed
         window.title = "Vane"
@@ -172,7 +172,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
         split.addSplitViewItem(sideItem)
         split.addSplitViewItem(contentItem)
-        split.splitView.autosaveName = "AegisSplit"
+        split.splitView.autosaveName = "VaneSplit"
         // A plain root view holds the split view, so overlays (palette,
         // banners, toasts) added to contentView sit above it instead of
         // becoming split panes.
@@ -197,13 +197,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         ])
         window.contentViewController = root
         // The split view sizes the window to its fitting size; restore ours.
-        if !window.setFrameUsingName("AegisMainWindow") || window.frame.width < 900 {
+        if !window.setFrameUsingName("VaneMainWindow") || window.frame.width < 900 {
             let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
             let size = NSSize(width: min(1320, screen.width * 0.86), height: min(860, screen.height * 0.88))
             window.setFrame(NSRect(origin: .zero, size: size), display: false)
             window.center()
         }
-        if UserDefaults.standard.object(forKey: "NSSplitView Subview Frames AegisSplit") == nil {
+        if UserDefaults.standard.object(forKey: "NSSplitView Subview Frames VaneSplit") == nil {
             split.splitView.setPosition(Tokens.Size.sidebarDefault, ofDividerAt: 0)
         }
 
@@ -848,7 +848,7 @@ extension BrowserWindowController: SidebarDelegate {
 
     func sidebarTabDragEnded(_ id: TabID, at screenPoint: NSPoint, accepted: Bool) {
         panes.endTabDrop()
-        // Dropped outside every Aegis window: the tab tears off into a window of its own.
+        // Dropped outside every Vane window: the tab tears off into a window of its own.
         guard !accepted, !NSApp.windows.contains(where: { $0.isVisible && $0.frame.contains(screenPoint) }) else { return }
         app.tearOff(id, from: self, at: screenPoint)
     }

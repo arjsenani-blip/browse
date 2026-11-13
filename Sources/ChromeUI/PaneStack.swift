@@ -274,7 +274,7 @@ final class PaneDropOverlay: NSView {
         self.stack = stack
         super.init(frame: .zero)
         wantsLayer = true
-        registerForDraggedTypes([.aegisTab])
+        registerForDraggedTypes([.vaneTab])
         highlight.wantsLayer = true
         highlight.layer?.cornerRadius = stack.cornerRadius
         highlight.layer?.cornerCurve = .continuous
@@ -302,7 +302,7 @@ final class PaneDropOverlay: NSView {
     }
 
     private func update(_ info: NSDraggingInfo) -> NSDragOperation {
-        guard let stack, let raw = info.draggingPasteboard.string(forType: .aegisTab) else { return [] }
+        guard let stack, let raw = info.draggingPasteboard.string(forType: .vaneTab) else { return [] }
         let p = convert(info.draggingLocation, from: nil)
         guard let t = stack.dropTarget(at: p), stack.canDropTab?(raw, t.0, t.1) ?? true else {
             target = nil
@@ -340,7 +340,7 @@ final class PaneDropOverlay: NSView {
     override func draggingExited(_ sender: NSDraggingInfo?) { target = nil; fade(to: 0) }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let stack, let t = target, let raw = sender.draggingPasteboard.string(forType: .aegisTab) else { return false }
+        guard let stack, let t = target, let raw = sender.draggingPasteboard.string(forType: .vaneTab) else { return false }
         stack.onDropTab?(raw, t.0, t.1)
         return true
     }

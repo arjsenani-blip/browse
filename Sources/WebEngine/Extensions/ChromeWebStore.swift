@@ -17,7 +17,7 @@ public enum ChromeWebStore {
     static let maxPackageSize = 256 * 1024 * 1024
     static let allowedHosts: Set<String> = ["clients2.google.com", "clients2.googleusercontent.com"]
 
-    /// True for Web Store pages (new and legacy) — where the lead shows "Add to Aegis".
+    /// True for Web Store pages (new and legacy) — where the lead shows "Add to Vane".
     public static func isStorePage(_ url: URL) -> Bool {
         guard let host = url.host()?.lowercased() else { return false }
         return host == storeHost || (host == "chrome.google.com" && url.path().hasPrefix("/webstore"))

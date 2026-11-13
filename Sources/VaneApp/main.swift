@@ -6,6 +6,9 @@ import AppKit
 // System Settings → "Show scroll bars: Always" still wins.
 UserDefaults.standard.register(defaults: ["AppleShowScrollBars": "WhenScrolling"])
 
+// Before anything opens a file: bring the pre-rename "Aegis" data folder over to "Vane".
+MainActor.assumeIsolated { DataMigration.run() }
+
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     let delegate = AppDelegate()

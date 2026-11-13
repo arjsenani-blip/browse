@@ -22,7 +22,7 @@ final class MockFetcher: FilterFetching, @unchecked Sendable {
     let validList = Data(("[Adblock Plus 2.0]\n! Title: Test\n" + String(repeating: "||ads.example^\n", count: 200)).utf8)
 
     func tempDir() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("aegis-flm-\(UUID().uuidString)", isDirectory: true)
+        FileManager.default.temporaryDirectory.appendingPathComponent("vane-flm-\(UUID().uuidString)", isDirectory: true)
     }
 
     @Test func bundledListsPresent() {
