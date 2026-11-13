@@ -14,6 +14,10 @@ public final class PaletteEngine: Sendable {
     /// nil disables engine suggestions (tests).
     public let suggester: SearchSuggester?
     private let snapshot = Mutex(HistorySnapshot.empty)
+    /// The last full pass's network/FTS results, reused by the next quick pass so
+    /// the list doesn't drop rows and re-add them a moment later on every keystroke.
+    private let carried = Mutex(Carried())
+    private struct Carried { var suggestions: [String] = []; var hits: [HistoryHit] = [] }
 
     public init(history: HistoryStore?, ranker: OmniboxRanker = OmniboxRanker(), suggester: SearchSuggester? = nil) {
         self.history = history
@@ -37,8 +41,19 @@ public final class PaletteEngine: Sendable {
     public var historySnapshot: HistorySnapshot { snapshot.withLock { $0 } }
 
     public func quickResults(_ query: PaletteQuery) -> [PaletteResult] {
-        ranker.rank(query, snapshot: historySnapshot)
+        let (scope, text) = query.parsed
+        guard !text.isEmpty, scope == .all || scope == .history else {
+            return ranker.rank(query, snapshot: historySnapshot)
+        }
+        let previous = carried.withLock { $0 }
+        // Only suggestions that still extend what's typed; the ranker re-filters FTS hits itself.
+        let prefix = text.lowercased().trimmingCharacters(in: .whitespaces)
+        let suggestions = scope == .all ? previous.suggestions.filter { $0.lowercased().hasPrefix(prefix) } : []
+        return ranker.rank(query, snapshot: historySnapshot, extraHits: previous.hits, suggestions: suggestions)
     }
+
+    /// Forget carried results (e.g. when the palette closes).
+    public func resetCarried() { carried.withLock { $0 = Carried() } }
 
     /// `remoteSuggestions` asks the search engine too (never in private windows).
     public func fullResults(_ query: PaletteQuery, ftsLimit: Int = 50, remoteSuggestions: Bool = false) async -> [PaletteResult] {
@@ -51,6 +66,7 @@ public final class PaletteEngine: Sendable {
         let hits = (try? await history?.search(text, limit: ftsLimit)) ?? []
         let list = await suggestions
         if Task.isCancelled { return quickResults(query) }
+        carried.withLock { $0 = Carried(suggestions: list, hits: hits) }
         return ranker.rank(query, snapshot: historySnapshot, extraHits: hits, suggestions: list)
     }
 }

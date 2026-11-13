@@ -67,8 +67,34 @@ enum DebugSnapshot {
             if let k = args.firstIndex(of: "--palette") {
                 services.frontController?.openPalette(args.contains("--newtab") ? .newTab : .command)
                 let q = k + 1 < args.count ? args[k + 1] : ""
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    services.frontController?.debugSetPaletteQuery(q)
+                if args.contains("--type") {
+                    // Type q one character every 110 ms and sample the panel each frame:
+                    // reports how often its top edge moved or its height shrank.
+                    var frames: [NSRect] = []
+                    let sampler = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in
+                        MainActor.assumeIsolated { if let f = services.frontController?.debugPaletteFrame { frames.append(f) } }
+                    }
+                    for (i, _) in q.enumerated() {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3 + 0.11 * Double(i)) {
+                            services.frontController?.debugSetPaletteQuery(String(q.prefix(i + 1)))
+                        }
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3 + 0.11 * Double(q.count) + 1.5) {
+                        sampler.invalidate()
+                        var topMoves = 0, shrinks = 0, grows = 0
+                        for (a, b) in zip(frames, frames.dropFirst()) {
+                            if abs(a.maxY - b.maxY) > 0.5 { topMoves += 1 }
+                            if b.height < a.height - 0.5 { shrinks += 1 }
+                            if b.height > a.height + 0.5 { grows += 1 }
+                        }
+                        let hs = frames.map(\.height)
+                        print("PALETTE samples=\(frames.count) topMoves=\(topMoves) shrinks=\(shrinks) grows=\(grows) minH=\(hs.min() ?? 0) maxH=\(hs.max() ?? 0)")
+                        fflush(stdout)
+                    }
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        services.frontController?.debugSetPaletteQuery(q)
+                    }
                 }
             }
             if args.contains("--demo-spaces"), let c = services.frontController {

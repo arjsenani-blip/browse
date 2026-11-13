@@ -127,6 +127,7 @@ struct PaletteView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @State private var appeared = false
+    @State private var heldResultsHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -155,76 +156,87 @@ struct PaletteView: View {
             .padding(.horizontal, 18)
             .frame(height: 56)
 
-            if let banner = model.banner, model.query.isEmpty, !model.commandsOnly {
-                Divider()
-                HStack(spacing: 12) {
-                    Image(systemName: banner.symbol)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color(nsColor: Tokens.accent(hue: model.accentHue))))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(banner.title).font(.system(size: 13.5, weight: .semibold))
-                        Text(banner.subtitle).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
-                    }
-                    Spacer(minLength: 8)
-                    Button(banner.actionTitle) { model.onDismiss?(); banner.action() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color(nsColor: Tokens.accent(hue: model.accentHue)))
-                        .controlSize(.regular)
-                }
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: Tokens.selectionFill(hue: model.accentHue))))
-                .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, model.items.isEmpty ? 10 : 2)
-                .accessibilityElement(children: .combine)
-            }
-
-            if model.items.isEmpty, model.commandsOnly, !model.query.isEmpty {
-                // Actions mode never falls back to a web search, so say why
-                // nothing is listed instead of showing a bare field.
-                Divider()
-                HStack(spacing: 8) {
-                    Text("No actions match \u{201C}\(model.query)\u{201D}")
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    Text("Clear the field, then ⌫ to search tabs and history")
-                        .foregroundStyle(.tertiary)
-                }
-                .font(.system(size: 12.5))
-                .lineLimit(1)
-                .padding(.horizontal, 20)
-                .frame(height: 44)
-                .accessibilityElement(children: .combine)
-            }
-
-            if !model.items.isEmpty {
-                Divider()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                                if index == 0 || model.items[index - 1].section != item.section {
-                                    Text(item.section.rawValue)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(.secondary)
-                                        .padding(.horizontal, 12)
-                                        .padding(.top, index == 0 ? 6 : 10)
-                                        .padding(.bottom, 2)
-                                }
-                                PaletteRow(item: item, selected: index == model.selection, hue: model.accentHue)
-                                    .id(item.id)
-                                    .onTapGesture { model.selection = index; model.activate(modifiers: []) }
-                            }
+            // Everything below the field. While typing, this area never shrinks:
+            // local results land instantly and web suggestions a beat later, and
+            // letting the panel shrink and grow on each keystroke made it jitter.
+            // It resets when the field is cleared.
+            VStack(spacing: 0) {
+                if let banner = model.banner, model.query.isEmpty, !model.commandsOnly {
+                    Divider()
+                    HStack(spacing: 12) {
+                        Image(systemName: banner.symbol)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color(nsColor: Tokens.accent(hue: model.accentHue))))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(banner.title).font(.system(size: 13.5, weight: .semibold))
+                            Text(banner.subtitle).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
                         }
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 8)
+                        Spacer(minLength: 8)
+                        Button(banner.actionTitle) { model.onDismiss?(); banner.action() }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color(nsColor: Tokens.accent(hue: model.accentHue)))
+                            .controlSize(.regular)
                     }
-                    .frame(maxHeight: 380)
-                    .onChange(of: model.selection) { _, new in
-                        if model.items.indices.contains(new) { proxy.scrollTo(model.items[new].id) }
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: Tokens.selectionFill(hue: model.accentHue))))
+                    .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, model.items.isEmpty ? 10 : 2)
+                    .accessibilityElement(children: .combine)
+                }
+
+                if model.items.isEmpty, model.commandsOnly, !model.query.isEmpty {
+                    // Actions mode never falls back to a web search, so say why
+                    // nothing is listed instead of showing a bare field.
+                    Divider()
+                    HStack(spacing: 8) {
+                        Text("No actions match \u{201C}\(model.query)\u{201D}")
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Text("Clear the field, then ⌫ to search tabs and history")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                    .padding(.horizontal, 20)
+                    .frame(height: 44)
+                    .accessibilityElement(children: .combine)
+                }
+
+                if !model.items.isEmpty {
+                    Divider()
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
+                                    if index == 0 || model.items[index - 1].section != item.section {
+                                        Text(item.section.rawValue)
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 12)
+                                            .padding(.top, index == 0 ? 6 : 10)
+                                            .padding(.bottom, 2)
+                                    }
+                                    PaletteRow(item: item, selected: index == model.selection, hue: model.accentHue)
+                                        .id(item.id)
+                                        .onTapGesture { model.selection = index; model.activate(modifiers: []) }
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.bottom, 8)
+                        }
+                        .frame(maxHeight: 380)
+                        .onChange(of: model.selection) { _, new in
+                            if model.items.indices.contains(new) { proxy.scrollTo(model.items[new].id) }
+                        }
                     }
                 }
             }
+            .frame(minHeight: model.query.isEmpty ? 0 : heldResultsHeight, alignment: .top)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in
+                if !model.query.isEmpty, h > heldResultsHeight { heldResultsHeight = h }
+            }
+            .onChange(of: model.query.isEmpty) { _, empty in if empty { heldResultsHeight = 0 } }
             Divider()
             HStack(spacing: 6) {
                 Image(systemName: "lock.shield").font(.system(size: 11))
@@ -348,6 +360,8 @@ public final class PaletteController {
     public var onClose: (() -> Void)?
 
     public var isOpen: Bool { host != nil }
+    /// Debug harness: the palette panel's frame in window coordinates.
+    public var debugFrame: NSRect? { paletteView.map { $0.convert($0.bounds, to: nil) } }
 
     public func show(in window: NSWindow, over anchor: NSView? = nil, dataSource: PaletteDataSource, initialText: String = "", hue: Double) {
         guard let content = window.contentView else { return }

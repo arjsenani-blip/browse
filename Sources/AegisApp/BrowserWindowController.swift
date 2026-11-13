@@ -512,6 +512,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func openPalette(_ mode: PaletteMode) {
         guard let window else { return }
+        app.engine.resetCarried()
         let source = app.paletteSource(for: self, mode: mode)
         var initial = ""
         if mode == .navigate { initial = store.selectedTab.flatMap { runtime.tab($0.id)?.url?.absoluteString } ?? "" }
@@ -530,6 +531,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func debugSetPaletteQuery(_ q: String) { palette.model.query = q }
+    var debugPaletteFrame: NSRect? { palette.debugFrame }
     var debugSidebar: SidebarViewController { sidebar }
 
     func navigate(to url: URL, newTab: Bool, background: Bool = false, typed: Bool = true) {
