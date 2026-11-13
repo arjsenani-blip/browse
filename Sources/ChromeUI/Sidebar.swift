@@ -46,6 +46,10 @@ public struct SidebarState: Equatable {
     public var isLoading = false
     public var nowPlaying: NowPlaying?
     public var activeDownloads = 0
+    /// The toolbar downloads button is on screen (a download is running or just finished, or its list is open).
+    public var downloadsShown = false
+    /// nil = nothing in flight; 0 = in flight, size unknown; else the overall fraction.
+    public var downloadsProgress: Double?
     public var style = SidebarStyle()
     public init() {}
 
@@ -152,6 +156,8 @@ public protocol SidebarDelegate: AnyObject {
     func sidebarSeparateSplit(_ id: TabID)
     /// The button beside the traffic lights.
     func sidebarToggleSidebar()
+    /// The toolbar downloads button (left of Back).
+    func sidebarOpenDownloads(from view: NSView)
 }
 
 /// The vertical sidebar: fixed navigation and address pill on top, a strip of
@@ -166,6 +172,8 @@ public final class SidebarViewController: NSViewController {
     private let forwardButton = SidebarViewController.iconButton("chevron.right", "Forward")
     private let reloadButton = SidebarViewController.iconButton("arrow.clockwise", "Reload")
     private let sidebarButton = SidebarViewController.iconButton("sidebar.left", "Hide Sidebar (⌘S)")
+    /// Left of Back; only present while there is a download to show.
+    public let downloadsButton = DownloadsButton()
     /// The floating copy shown while peeking at a hidden sidebar: its button docks it again.
     public var isPeek = false {
         didSet { sidebarButton.toolTip = isPeek ? "Keep Sidebar Open (⌘S)" : "Hide Sidebar (⌘S)" }
@@ -189,8 +197,14 @@ public final class SidebarViewController: NSViewController {
         let host = SwipeHostView()
         host.onSwipeBegan = { [weak self] event in self?.trackSwipe(event) ?? false }
 
-        let nav = NSStackView(views: [backButton, forwardButton, reloadButton])
+        let nav = NSStackView(views: [downloadsButton, backButton, forwardButton, reloadButton])
         nav.spacing = 6
+        nav.detachesHiddenViews = true
+        downloadsButton.isHidden = true
+        downloadsButton.onClick = { [weak self] in
+            guard let self else { return }
+            self.delegate?.sidebarOpenDownloads(from: self.downloadsButton)
+        }
         backButton.target = self; backButton.action = #selector(back)
         forwardButton.target = self; forwardButton.action = #selector(forward)
         reloadButton.target = self; reloadButton.action = #selector(reload)
@@ -317,6 +331,15 @@ public final class SidebarViewController: NSViewController {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = Tokens.Motion.duration(0.2)
                 nowPlayingView.animator().isHidden = new.nowPlaying == nil
+            }
+        }
+        downloadsButton.update(progress: new.downloadsProgress, neon: Tokens.neon(from: new.current?.theme.bottom ?? ThemeColor(r: 1, g: 0, b: 0)))
+        if downloadsButton.isHidden == new.downloadsShown {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = Tokens.Motion.duration(0.2)
+                ctx.allowsImplicitAnimation = true
+                downloadsButton.isHidden = !new.downloadsShown
+                downloadsButton.superview?.layoutSubtreeIfNeeded()
             }
         }
         libraryBadge.isHidden = new.activeDownloads == 0

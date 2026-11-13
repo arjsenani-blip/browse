@@ -6,6 +6,7 @@ import BrowserCore
 @MainActor
 public final class TopTabBar: NSView {
     public weak var delegate: SidebarDelegate?
+    public let downloadsButton = DownloadsButton()
     private let back = SidebarViewController.iconButton("chevron.left", "Back")
     private let forward = SidebarViewController.iconButton("chevron.right", "Forward")
     private let reload = SidebarViewController.iconButton("arrow.clockwise", "Reload")
@@ -31,8 +32,14 @@ public final class TopTabBar: NSView {
         scroll.wantsLayer = true
         scroll.layer?.masksToBounds = true
         scroll.addSubview(strip)
-        let nav = NSStackView(views: [back, forward, reload])
+        let nav = NSStackView(views: [downloadsButton, back, forward, reload])
         nav.spacing = 4
+        nav.detachesHiddenViews = true
+        downloadsButton.isHidden = true
+        downloadsButton.onClick = { [weak self] in
+            guard let self else { return }
+            self.delegate?.sidebarOpenDownloads(from: self.downloadsButton)
+        }
         for v in [nav, pill, scroll, newTab] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
@@ -64,6 +71,8 @@ public final class TopTabBar: NSView {
         let old = state
         state = new
         back.isEnabled = new.canGoBack
+        downloadsButton.update(progress: new.downloadsProgress, neon: Tokens.neon(from: new.current?.theme.bottom ?? ThemeColor(r: 1, g: 0, b: 0)))
+        if downloadsButton.isHidden == new.downloadsShown { downloadsButton.isHidden = !new.downloadsShown }
         forward.isEnabled = new.canGoForward
         reload.image = NSImage(systemSymbolName: new.isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: new.isLoading ? "Stop" : "Reload")
         reload.toolTip = new.isLoading ? "Stop" : "Reload (⌘R)"

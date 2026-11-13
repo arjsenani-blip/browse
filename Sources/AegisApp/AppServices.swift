@@ -93,6 +93,7 @@ final class AppServices {
         saveTimer?.tolerance = 120
         Task.detached(priority: .background) { [history] in try? await history?.decayInputHistory() }
         DownloadCenter.shared.onChange = { [weak self] in self?.controllers.forEach { $0.refreshLibrary() } }
+        DownloadCenter.shared.onStart = { [weak self] item in self?.frontController?.downloadStarted(item) }
     }
 
     // MARK: Windows

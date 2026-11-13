@@ -161,17 +161,24 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
         public var finished = false
         public var failed = false
         public var fractionCompleted: Double = 0
+        public var receivedBytes: Int64?
+        /// Stopped by the person (shown as "Cancelled", not "Failed").
+        public var cancelled: Bool?
         /// From a private window: listed while open, never written to disk.
         public var ephemeral: Bool?
         public var isMedia: Bool {
             guard let ext = destination?.pathExtension.lowercased() ?? filename.split(separator: ".").last.map({ String($0).lowercased() }) else { return false }
             return ["png", "jpg", "jpeg", "gif", "webp", "heic", "avif", "svg", "mp4", "mov", "m4v", "webm", "mp3", "m4a", "wav", "aac", "flac"].contains(ext)
         }
+        public init(filename: String) { self.filename = filename }
         public var fileExists: Bool { destination.map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
     }
     public private(set) var items: [Item] = []
     public var onChange: (() -> Void)?
+    /// A new download began (the window shows its button and flies the file in).
+    public var onStart: ((Item) -> Void)?
     private var map: [ObjectIdentifier: UUID] = [:]
+    private var live: [UUID: WKDownload] = [:]
     private var progressObservers: [UUID: NSKeyValueObservation] = [:]
     private let file = AppPaths.support.appending(path: "downloads.json")
 
@@ -192,20 +199,53 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
         item.ephemeral = ephemeral ? true : nil
         items.insert(item, at: 0)
         map[ObjectIdentifier(download)] = item.id
+        live[item.id] = download
         let id = item.id
         progressObservers[id] = download.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
-            let fraction = progress.fractionCompleted, total = progress.totalUnitCount
+            let fraction = progress.fractionCompleted, total = progress.totalUnitCount, done = progress.completedUnitCount
             Task { @MainActor in
                 guard let self, let i = self.items.firstIndex(where: { $0.id == id }) else { return }
                 self.items[i].fractionCompleted = fraction
                 if total > 0 { self.items[i].totalBytes = total }
+                if done > 0 { self.items[i].receivedBytes = done }
                 self.onChange?()
             }
         }
         changed()
+        onStart?(item)
+    }
+
+    /// Stop an in-flight download; it stays in the list as cancelled (and can be retried).
+    public func cancel(_ id: UUID) {
+        guard let download = live[id], let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].cancelled = true
+        items[i].failed = true
+        progressObservers[id] = nil
+        live[id] = nil
+        download.cancel { _ in }
+        changed()
+    }
+
+    /// Download a URL directly (no navigation), through a page's web view.
+    public func start(_ url: URL, in webView: WKWebView) {
+        let ephemeral = !webView.configuration.websiteDataStore.isPersistent
+        webView.startDownload(using: URLRequest(url: url)) { [weak self] download in
+            self?.track(download, ephemeral: ephemeral)
+        }
+    }
+
+    /// Download a failed or cancelled item again through a page's web view (same cookies and profile).
+    public func retry(_ id: UUID, in webView: WKWebView) {
+        guard let item = items.first(where: { $0.id == id }), item.failed, let url = item.sourceURL else { return }
+        let ephemeral = item.ephemeral == true
+        items.removeAll { $0.id == id }
+        webView.startDownload(using: URLRequest(url: url)) { [weak self] download in
+            self?.track(download, ephemeral: ephemeral)
+        }
     }
 
     public func remove(_ id: UUID) {
+        if live[id] != nil { cancel(id) }
         items.removeAll { $0.id == id }
         changed()
     }
@@ -237,7 +277,7 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
 
     public func downloadDidFinish(_ download: WKDownload) {
         update(download) { $0.finished = true; $0.fractionCompleted = 1 }
-        if let id = map[ObjectIdentifier(download)] { progressObservers[id] = nil }
+        if let id = map[ObjectIdentifier(download)] { progressObservers[id] = nil; live[id] = nil }
         // Bounce the Downloads stack in the Dock, as Safari does.
         if let url = items.first(where: { $0.id == map[ObjectIdentifier(download)] })?.destination {
             DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: url.path)
@@ -246,6 +286,7 @@ public final class DownloadCenter: NSObject, WKDownloadDelegate {
 
     public func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
         update(download) { $0.failed = true }
+        if let id = map[ObjectIdentifier(download)] { progressObservers[id] = nil; live[id] = nil }
     }
 
     private func update(_ download: WKDownload, _ change: (inout Item) -> Void) {

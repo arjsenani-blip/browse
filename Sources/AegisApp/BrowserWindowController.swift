@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import WebKit
 import Observation
 import BrowserCore
@@ -28,6 +29,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     let peekSidebar = SidebarViewController()
     private let palette = PaletteController()
     private let library = LibraryController()
+    private lazy var downloadsPopover: DownloadsPopoverController = {
+        let p = DownloadsPopoverController(model: library.model)
+        p.onOpenFolder = { NSWorkspace.shared.open(FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]) }
+        p.onShowAll = { [weak self] in self?.openLibrary(tab: .downloads) }
+        p.onVisibilityChange = { [weak self] in self?.scheduleRefresh() }
+        return p
+    }()
+    /// The toolbar downloads button lingers this long after the last download settles.
+    private var downloadsVisibleUntil: Date?
+    private var downloadsHideTimer: Timer?
+    private var downloadsInFlight: Set<UUID> = []
     private lazy var reader = ReaderView()
     private var readerFor: TabID?
     private var shownTab: TabID?
@@ -326,7 +338,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
         s.pages = builtPages
         s.currentIndex = visible.firstIndex { $0.id == space.id } ?? 0
-        s.activeDownloads = DownloadCenter.shared.active.count
+        let active = DownloadCenter.shared.active
+        s.activeDownloads = active.count
+        s.downloadsShown = !active.isEmpty || downloadsPopover.isShown || (downloadsVisibleUntil.map { $0 > Date() } ?? false)
+        if !active.isEmpty {
+            let total = active.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }
+            let done = active.reduce(0.0) { $0 + $1.fractionCompleted * Double(max(0, $1.totalBytes)) }
+            let known = active.allSatisfy { $0.totalBytes > 0 }
+            s.downloadsProgress = known && total > 0 ? done / Double(total) : (active.count == 1 ? max(0, active[0].fractionCompleted) : 0)
+        }
         s.nowPlaying = nowPlaying()
 
         // Text reads dark or light depending on the gradient behind it.
@@ -349,7 +369,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             s.canGoBack = live.canGoBack
             s.canGoForward = live.canGoForward
             s.isLoading = live.isLoading
-            focusCard.setProgress(live.progress, loading: live.isLoading, hue: space.accentHue)
+            focusCard.setProgress(debugProgress ?? live.progress, loading: debugProgress != nil || live.isLoading, glow: space.resolvedTheme.bottom)
             // Gone once the page has painted: finished, or committed a moment ago (some sites never fire load).
             if (!live.isLoading && live.progress >= 1) || live.committedSinceWake.map({ Date().timeIntervalSince($0) > 0.4 }) == true {
                 focusCard.dismissSnapshot()
@@ -696,6 +716,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func debugShowPeek() { peek.show() }
+    /// Snapshot harness: hold the load bar at a fraction so it can be captured.
+    var debugDownloadsPopoverShown: Bool { downloadsPopover.isShown }
+    var debugProgress: Double? { didSet { refresh() } }
     var debugPanes: String {
         panes.cards.map { c in "\((c.current as? WKWebView)?.url?.host() ?? "none")@\(Int(c.frame.minX))w\(Int(c.frame.width))" }.joined(separator: " | ")
     }
@@ -818,6 +841,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
 extension BrowserWindowController: SidebarDelegate {
     func sidebarOpenInSplit(_ id: TabID) { openInSplit(id) }
+
+    func sidebarOpenDownloads(from view: NSView) { toggleDownloads(from: view) }
 
     func sidebarTabDragBegan(_ id: TabID) { panes.beginTabDrop() }
 
@@ -1120,7 +1145,111 @@ extension BrowserWindowController: SidebarDelegate {
 
     func refreshLibrary() {
         library.model.items = DownloadCenter.shared.items.map(ChromeUI.LibraryItem.init)
+        // Downloads that just landed: flash the check and keep the button around a while.
+        let nowActive = Set(DownloadCenter.shared.active.map(\.id))
+        let settled = downloadsInFlight.subtracting(nowActive)
+        downloadsInFlight = nowActive
+        if !settled.isEmpty || !nowActive.isEmpty { holdDownloadsButton() }
+        if !settled.isEmpty, nowActive.isEmpty,
+           DownloadCenter.shared.items.contains(where: { settled.contains($0.id) && $0.finished }) {
+            sidebar.downloadsButton.finished()
+            topBar.downloadsButton.finished()
+        }
         scheduleRefresh()
+    }
+
+    private func holdDownloadsButton() {
+        downloadsVisibleUntil = Date().addingTimeInterval(60)
+        downloadsHideTimer?.invalidate()
+        downloadsHideTimer = Timer.scheduledTimer(withTimeInterval: 60.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleRefresh() }
+        }
+        downloadsHideTimer?.tolerance = 1
+    }
+
+    /// The downloads button currently on screen in this window, if any.
+    private var visibleDownloadsButton: DownloadsButton? {
+        // Top bar, docked sidebar, or the peeking copy: whichever is actually on screen.
+        let candidates = tabsOnTop ? [topBar.downloadsButton] : [sidebar.downloadsButton, peekSidebar.downloadsButton]
+        return candidates.first { b in
+            guard let w = b.window, w == window, !b.isHiddenOrHasHiddenAncestor, b.alphaValue > 0 else { return false }
+            let r = b.convert(b.bounds, to: nil)
+            return w.contentView.map { $0.bounds.intersects($0.convert(r, from: nil)) } ?? false
+        }
+    }
+
+    func toggleDownloads(from view: NSView? = nil) {
+        library.model.items = DownloadCenter.shared.items.map(ChromeUI.LibraryItem.init)
+        holdDownloadsButton()
+        refresh()
+        view?.superview?.layoutSubtreeIfNeeded()
+        guard let anchor = view ?? visibleDownloadsButton else { openLibrary(tab: .downloads); return }
+        downloadsPopover.toggle(relativeTo: anchor, actions: self, neon: Tokens.neon(from: store.currentSpace.resolvedTheme.bottom))
+    }
+
+    /// A download began in this window: show the button, fly the file into it, then open the list (as Dia does).
+    func downloadStarted(_ item: DownloadCenter.Item) {
+        downloadsInFlight.insert(item.id)
+        holdDownloadsButton()
+        refresh()
+        window?.contentView?.layoutSubtreeIfNeeded()
+        guard let window, window.isVisible, let button = visibleDownloadsButton, let content = window.contentView else { return }
+        let openList = { [weak self, weak button] in
+            guard let self, let button, self.window?.isKeyWindow == true, !self.downloadsPopover.isShown else { return }
+            self.downloadsPopover.show(relativeTo: button, actions: self, neon: Tokens.neon(from: self.store.currentSpace.resolvedTheme.bottom))
+        }
+        guard !Tokens.Motion.reduceMotion else { button.bump(); openList(); return }
+        // A click-through overlay above everything carries the flying icon.
+        let overlay = PassthroughLayerView(frame: content.bounds)
+        overlay.wantsLayer = true
+        content.addSubview(overlay, positioned: .above, relativeTo: nil)
+        guard let rootLayer = overlay.layer else { overlay.removeFromSuperview(); return }
+
+        // The flying file: its icon leaves the middle of the page and arcs into the button.
+        let ext = (item.filename as NSString).pathExtension
+        let icon = NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data)
+        let cardFrame = focusCard.convert(focusCard.bounds, to: overlay)
+        let start = CGPoint(x: cardFrame.midX, y: cardFrame.midY)
+        let target = button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: overlay)
+        let flyer = CALayer()
+        flyer.contents = icon
+        flyer.bounds = CGRect(x: 0, y: 0, width: 64, height: 64)
+        flyer.position = target
+        flyer.zPosition = 1000
+        flyer.shadowColor = Tokens.neon(from: store.currentSpace.resolvedTheme.bottom).cgColor
+        flyer.shadowRadius = 12
+        flyer.shadowOpacity = 0.8
+        flyer.shadowOffset = .zero
+        flyer.transform = CATransform3DMakeScale(0.22, 0.22, 1)
+        flyer.opacity = 0
+        rootLayer.addSublayer(flyer)
+
+        let path = CGMutablePath()
+        path.move(to: start)
+        // Kept inside the window: the button sits near the top edge, so the lift is a sweep, not a lob.
+        let lift = min(overlay.bounds.height - 36, max(start.y, target.y) + 24)
+        path.addQuadCurve(to: target, control: CGPoint(x: target.x + (start.x - target.x) * 0.55, y: lift))
+        let move = CAKeyframeAnimation(keyPath: "position")
+        move.path = path
+        move.timingFunction = CAMediaTimingFunction(controlPoints: 0.45, 0, 0.2, 1)
+        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+        scale.values = [0.4, 1.15, 1, 0.22]
+        scale.keyTimes = [0, 0.18, 0.45, 1]
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = [0, 1, 1, 0.9]
+        fade.keyTimes = [0, 0.12, 0.85, 1]
+        let group = CAAnimationGroup()
+        group.animations = [move, scale, fade]
+        group.duration = 0.75
+        let t0 = CACurrentMediaTime()
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak button] in
+            overlay.removeFromSuperview()
+            button?.bump()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { openList() }
+        }
+        flyer.add(group, forKey: "fly")
+        CATransaction.commit()
     }
 
     func duplicateTab(_ id: TabID) {
@@ -1211,11 +1340,18 @@ final class ClosureMenuItem: NSMenuItem {
 
 // MARK: - Library
 
+/// A transparent overlay that never takes clicks (used for the download fly-in).
+final class PassthroughLayerView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 extension ChromeUI.LibraryItem {
     init(_ d: DownloadCenter.Item) {
         self.init(id: d.id, name: d.filename, file: d.destination, source: d.sourceURL, date: d.started,
                   bytes: d.totalBytes, progress: d.finished || d.failed ? nil : d.fractionCompleted,
                   failed: d.failed, isMedia: d.isMedia, exists: d.fileExists)
+        received = d.receivedBytes ?? 0
+        cancelled = d.cancelled == true
     }
 }
 
@@ -1239,6 +1375,13 @@ extension BrowserWindowController: LibraryActions {
     func libraryClearFinished() {
         DownloadCenter.shared.clearFinished()
         refreshLibrary()
+    }
+    func libraryCancel(_ item: ChromeUI.LibraryItem) {
+        DownloadCenter.shared.cancel(item.id)
+    }
+    func libraryRetry(_ item: ChromeUI.LibraryItem) {
+        guard let webView = store.selectedTab.flatMap({ runtime.tab($0.id)?.webView }) else { return }
+        DownloadCenter.shared.retry(item.id, in: webView)
     }
 }
 

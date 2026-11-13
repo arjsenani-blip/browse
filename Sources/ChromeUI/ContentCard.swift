@@ -1,4 +1,5 @@
 import AppKit
+import BrowserCore
 
 /// The page as an opaque, rounded card inset in the window. Hosts whichever
 /// web view (or reader view) is current, a thin progress line, and the
@@ -56,7 +57,7 @@ public final class ContentCard: NSView {
             progress.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
             progress.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
             progress.topAnchor.constraint(equalTo: clip.topAnchor),
-            progress.heightAnchor.constraint(equalToConstant: 2),
+            progress.heightAnchor.constraint(equalToConstant: 14),   // room for the glow
         ])
     }
 
@@ -211,13 +212,14 @@ public final class ContentCard: NSView {
         clip.layer?.cornerRadius = r
     }
 
-    private var lastProgress: (Double, Bool, Double)?
+    private var lastProgress: (Double, Bool, ThemeColor)?
 
-    public func setProgress(_ value: Double, loading: Bool, hue: Double) {
+    /// `glow` is the space gradient's bottom stop; the bar shows its neon version.
+    public func setProgress(_ value: Double, loading: Bool, glow: ThemeColor) {
         // Redraws are frequent; only animate when the bar actually changes.
-        if let last = lastProgress, last.0 == value, last.1 == loading, last.2 == hue { return }
-        lastProgress = (value, loading, hue)
-        progress.color = Tokens.accent(hue: hue)
+        if let last = lastProgress, last.0 == value, last.1 == loading, last.2 == glow { return }
+        lastProgress = (value, loading, glow)
+        progress.color = Tokens.neon(from: glow)
         progress.set(value: loading ? value : 1, visible: loading)
     }
 
@@ -256,34 +258,119 @@ final class NSHostingSafeEmptyView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
+/// The page-load line: a neon tube in the space's bottom gradient colour,
+/// with a bloom underneath, a white-hot comet head and a shimmer sweeping
+/// toward the head while loading.
 final class ProgressLine: NSView {
-    var color: NSColor = .controlAccentColor { didSet { bar.layer?.backgroundColor = color.cgColor } }
-    private let bar = NSView()
-    private var width: NSLayoutConstraint?
+    var color: NSColor = .systemRed { didSet { if color != oldValue { recolor() } } }
+    private let bloom = CALayer()          // wide, soft halo
+    private let glow = CALayer()           // tight halo hugging the tube
+    private let core = CAGradientLayer()   // the tube itself
+    private let filament = CAGradientLayer() // white-hot centre line
+    private let head = CALayer()
+    private let shimmer = CAGradientLayer()
+    private let barHeight: CGFloat = 3
+    private var fraction: CGFloat = 0
+    private var shown = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        bar.wantsLayer = true
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(bar)
-        width = bar.widthAnchor.constraint(equalToConstant: 0)
-        NSLayoutConstraint.activate([
-            bar.leadingAnchor.constraint(equalTo: leadingAnchor),
-            bar.topAnchor.constraint(equalTo: topAnchor),
-            bar.bottomAnchor.constraint(equalTo: bottomAnchor),
-            width!,
-        ])
+        wantsLayer = true
+        layer?.masksToBounds = false
+        for l in [bloom, glow, core, head] as [CALayer] { layer?.addSublayer(l) }
+        core.addSublayer(filament)
+        core.addSublayer(shimmer)
+        for g in [core, filament, shimmer] { g.startPoint = CGPoint(x: 0, y: 0.5); g.endPoint = CGPoint(x: 1, y: 0.5) }
+        core.masksToBounds = true
+        core.cornerRadius = barHeight / 2
+        for (l, r, o) in [(bloom, CGFloat(14), Float(0.9)), (glow, 4, 1), (head, 8, 1)] {
+            l.shadowOffset = .zero; l.shadowRadius = r; l.shadowOpacity = o
+        }
+        shimmer.colors = [NSColor.white.withAlphaComponent(0).cgColor, NSColor.white.withAlphaComponent(0.85).cgColor, NSColor.white.withAlphaComponent(0).cgColor]
         alphaValue = 0
+        recolor()
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Purely decorative: clicks go through to the page.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override var isFlipped: Bool { true }
+
+    private func recolor() {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        let hot = c.blended(withFraction: 0.7, of: .white) ?? .white
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        core.colors = [c.withAlphaComponent(0).cgColor, c.withAlphaComponent(0.85).cgColor, c.cgColor]
+        core.locations = [0, 0.25, 1]
+        filament.colors = [NSColor.white.withAlphaComponent(0).cgColor, NSColor.white.withAlphaComponent(0.55).cgColor, NSColor.white.withAlphaComponent(0.9).cgColor]
+        filament.locations = [0.3, 0.8, 1]
+        for l in [bloom, glow] { l.shadowColor = c.cgColor }
+        head.backgroundColor = hot.cgColor
+        head.shadowColor = c.cgColor
+        CATransaction.commit()
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        place()
+        CATransaction.commit()
+    }
+
+    private func place() {
+        let w = bounds.width * fraction
+        core.frame = CGRect(x: 0, y: 0, width: w, height: barHeight)
+        filament.frame = CGRect(x: 0, y: barHeight / 2 - 0.5, width: w, height: 1)
+        // Halos are shadow-only wedges: hairline at the tail, full height at the head, so they fade in.
+        for (l, start) in [(glow, CGFloat(0.15)), (bloom, 0.4)] {
+            l.frame = CGRect(x: 0, y: 0, width: w, height: barHeight)
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: w * start, y: barHeight / 2))
+            path.addLine(to: CGPoint(x: w, y: 0))
+            path.addLine(to: CGPoint(x: w, y: barHeight))
+            path.closeSubpath()
+            l.shadowPath = path
+        }
+        let headWidth = min(28, max(8, w * 0.08))
+        head.frame = CGRect(x: max(0, w - headWidth), y: 0, width: headWidth, height: barHeight)
+        head.cornerRadius = barHeight / 2
+        shimmer.frame = CGRect(x: 0, y: 0, width: min(180, max(60, w * 0.35)), height: barHeight)
+    }
+
     func set(value: Double, visible: Bool) {
-        let target = bounds.width * max(0.08, min(1, value))
+        let newFraction = CGFloat(max(0.08, min(1, value)))
+        let starting = visible && !shown
+        if starting {
+            // A fresh load starts from the left edge instead of shrinking back from the last one.
+            fraction = 0
+            CATransaction.begin(); CATransaction.setDisableActions(true); place(); CATransaction.commit()
+        }
+        shown = visible
+        fraction = newFraction
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(Tokens.Motion.duration(0.25))
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        place()
+        CATransaction.commit()
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = Tokens.Motion.duration(0.2)
-            ctx.allowsImplicitAnimation = true
-            width?.animator().constant = target
+            ctx.duration = Tokens.Motion.duration(visible ? 0.12 : 0.35)
             animator().alphaValue = visible ? 1 : 0
+        }
+        updateShimmer(visible)
+    }
+
+    private func updateShimmer(_ on: Bool) {
+        let running = shimmer.animation(forKey: "sweep") != nil
+        if on && !running && !Tokens.Motion.reduceMotion {
+            let a = CABasicAnimation(keyPath: "transform.translation.x")
+            a.fromValue = -160
+            a.toValue = 2000
+            a.duration = 1.4
+            a.repeatCount = .infinity
+            a.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            shimmer.add(a, forKey: "sweep")
+        } else if !on && running {
+            shimmer.removeAnimation(forKey: "sweep")
         }
     }
 }

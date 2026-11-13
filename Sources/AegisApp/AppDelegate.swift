@@ -127,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func previousPane() { front?.focusPane(by: -1) }
     @objc func focusPane(_ sender: NSMenuItem) { front?.focusPane(at: sender.tag) }
     @objc func showLibrary() { front?.openLibrary() }
+    @objc func showDownloads() { front?.toggleDownloads() }
     @objc func toggleTabsOnTop() {
         let on = !(front?.tabsOnTop ?? false)
         services.forEachController { $0.tabsOnTop = on }

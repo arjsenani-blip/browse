@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import BrowserCore
+import WebEngine
 
 /// Development aid: `Aegis --snapshot out.png [--open URL] [--palette query]`
 /// renders the front window (chrome via cacheDisplay, the page via
@@ -197,6 +198,56 @@ enum DebugSnapshot {
             }
             if args.contains("--library") {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { services.frontController?.openLibrary(tab: args.contains("--media") ? .media : .downloads) }
+            }
+            // --neon r,g,b,fraction: give the current space a black→(r,g,b) gradient and hold the load bar.
+            if let k = args.firstIndex(of: "--neon"), k + 1 < args.count, let c = services.frontController {
+                let v = args[k + 1].split(separator: ",").compactMap { Double($0) }
+                if v.count == 4 {
+                    c.store.setTheme(SpaceTheme(top: ThemeColor(r: 0, g: 0, b: 0), bottom: ThemeColor(r: v[0], g: v[1], b: v[2]), intensity: 1), for: c.store.currentSpace.id)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { c.debugProgress = v[3] }
+                }
+            }
+            // --download URL [--download-after s]: start a real download in the selected tab (button, fly-in, popover).
+            if let k = args.firstIndex(of: "--download"), k + 1 < args.count, let url = URL(string: args[k + 1]), let c = services.frontController {
+                let after = args.firstIndex(of: "--download-after").flatMap { Double(args[$0 + 1]) } ?? 0.5
+                DispatchQueue.main.asyncAfter(deadline: .now() + after) {
+                    NSApp.activate(); c.window?.makeKeyAndOrderFront(nil)
+                    if let id = c.store.selectedTab?.id, let web = services.runtime.tab(id)?.webView {
+                        DownloadCenter.shared.start(url, in: web)
+                    }
+                }
+            }
+            // --fly-test DIR: fake a download start and screen-capture the window mid-flight and after.
+            if let k = args.firstIndex(of: "--fly-test"), k + 1 < args.count, let c = services.frontController {
+                let dir = args[k + 1]
+                NSApp.activate(); c.window?.makeKeyAndOrderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    c.downloadStarted(DownloadCenter.Item(filename: "Quarterly Report.pdf"))
+                    for t in [0.15, 0.35, 0.55, 0.8, 1.6] {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + t) {
+                            guard let n = c.window?.windowNumber else { return }
+                            let p = Process()
+                            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                            p.arguments = ["-x", "-o", "-l", "\(n)", "\(dir)/fly-\(t).png"]
+                            try? p.run()
+                        }
+                    }
+                    // Popover is its own window: grab the whole screen once it should be open.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { if !c.debugDownloadsPopoverShown { c.toggleDownloads() } }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) {
+                        print("POPOVER shown=\(c.debugDownloadsPopoverShown) key=\(c.window?.isKeyWindow ?? false) active=\(NSApp.isActive)"); fflush(stdout)
+                        let p = Process()
+                        p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                        p.arguments = ["-x", "\(dir)/fly-screen.png"]
+                        try? p.run()
+                        for w in NSApp.windows where w.isVisible && w !== c.window {
+                            let q = Process()
+                            q.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                            q.arguments = ["-x", "-o", "-l", "\(w.windowNumber)", "\(dir)/fly-win-\(w.windowNumber).png"]
+                            try? q.run()
+                        }
+                    }
+                }
             }
             if args.contains("--reader") { services.frontController?.toggleReader() }
             if args.contains("--split"), let c = services.frontController {

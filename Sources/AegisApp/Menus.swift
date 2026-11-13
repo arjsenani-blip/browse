@@ -65,6 +65,7 @@ enum Menus {
             hidden(item("Pane 4", #selector(AppDelegate.focusPane(_:)), "4", [.control, .shift], target: target, tag: 3)),
             .separator(),
             item("Tabs on Top", #selector(AppDelegate.toggleTabsOnTop), "", target: target),
+            item("Downloads", #selector(AppDelegate.showDownloads), "j", [.command, .shift], target: target),
             item("Downloads and Media", #selector(AppDelegate.showLibrary), "j", [.command, .option], target: target),
             item("Reader", #selector(AppDelegate.toggleReader), "r", [.command, .shift], target: target),
             item("Reader Theme", #selector(AppDelegate.cycleReaderTheme), "r", [.command, .option], target: target),

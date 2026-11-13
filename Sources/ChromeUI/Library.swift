@@ -16,6 +16,8 @@ public struct LibraryItem: Identifiable, Equatable, Sendable {
     public var failed: Bool
     public var isMedia: Bool
     public var exists: Bool
+    public var received: Int64 = 0
+    public var cancelled = false
     public init(id: UUID, name: String, file: URL?, source: URL?, date: Date, bytes: Int64, progress: Double?, failed: Bool, isMedia: Bool, exists: Bool) {
         self.id = id; self.name = name; self.file = file; self.source = source; self.date = date
         self.bytes = bytes; self.progress = progress; self.failed = failed; self.isMedia = isMedia; self.exists = exists
@@ -29,6 +31,13 @@ public protocol LibraryActions: AnyObject {
     func libraryReveal(_ item: LibraryItem)
     func libraryRemove(_ item: LibraryItem)
     func libraryClearFinished()
+    func libraryCancel(_ item: LibraryItem)
+    func libraryRetry(_ item: LibraryItem)
+}
+
+public extension LibraryActions {
+    func libraryCancel(_ item: LibraryItem) {}
+    func libraryRetry(_ item: LibraryItem) {}
 }
 
 @MainActor

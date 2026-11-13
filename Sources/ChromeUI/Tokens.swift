@@ -1,4 +1,5 @@
 import AppKit
+import BrowserCore
 
 /// Design tokens from docs/research/05-design-language.md. Window radii come
 /// from the system; everything here is the chrome inside it.
@@ -40,6 +41,15 @@ public enum Tokens {
     }
 
     /// The space accent, from its hue. Dark mode lifts luminance.
+    /// A theme colour pushed to full neon: same hue, saturation and brightness
+    /// maxed. Near-grey colours (no real hue) become a cool electric white.
+    public static func neon(from c: ThemeColor) -> NSColor {
+        if c.saturation < 0.12 { return NSColor(srgbRed: 0.86, green: 0.93, blue: 1, alpha: 1) }
+        // Crimson and raspberry bottoms read as pink once saturated; pull them to a true neon red.
+        let hue = (c.hue > 0.9 || c.hue < 0.03) ? 0.992 : c.hue
+        return NSColor(calibratedHue: hue, saturation: 0.95, brightness: 1, alpha: 1)
+    }
+
     public static func accent(hue: Double) -> NSColor {
         NSColor(name: nil) { appearance in
             let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
