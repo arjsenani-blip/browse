@@ -208,6 +208,19 @@ enum DebugSnapshot {
                 }
             }
             // --download URL [--download-after s]: start a real download in the selected tab (button, fly-in, popover).
+            // --fake-input: one synthetic key press (F19) through the event queue, as if the user
+            // had just typed. Tests the embedded-frame download gate.
+            if args.contains("--fake-input"), let c = services.frontController {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NSApp.activate(); c.window?.makeKeyAndOrderFront(nil)
+                    let f19 = String(UnicodeScalar(NSF19FunctionKey)!)
+                    if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                windowNumber: c.window?.windowNumber ?? 0, context: nil, characters: f19,
+                                                charactersIgnoringModifiers: f19, isARepeat: false, keyCode: 80) {
+                        NSApp.postEvent(e, atStart: false)
+                    }
+                }
+            }
             if let k = args.firstIndex(of: "--download"), k + 1 < args.count, let url = URL(string: args[k + 1]), let c = services.frontController {
                 let after = args.firstIndex(of: "--download-after").flatMap { Double(args[$0 + 1]) } ?? 0.5
                 DispatchQueue.main.asyncAfter(deadline: .now() + after) {
@@ -355,7 +368,10 @@ enum DebugSnapshot {
             }
             if let e = args.firstIndex(of: "--eval"), e + 1 < args.count,
                let c = services.frontController, let id = c.store.selectedTab?.id, let web = c.runtime.tab(id)?.webView {
+                // --eval-after S: wait for the page to load before running the script.
+                let after = args.firstIndex(of: "--eval-after").flatMap { Double(args[$0 + 1]) } ?? 0
                 Task {
+                    if after > 0 { try? await Task.sleep(for: .seconds(after)) }
                     let r = try? await web.callAsyncJavaScript(args[e + 1], arguments: [:], in: nil, contentWorld: .page)
                     print("EVAL \(r.map { "\($0)" } ?? "nil")"); fflush(stdout)
                 }

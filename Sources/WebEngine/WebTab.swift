@@ -85,6 +85,7 @@ public final class WebTab: NSObject {
     public init(id: TabID, context: ProfileContext) {
         self.id = id
         self.context = context
+        UserInput.startTracking()
     }
 
     public var isAwake: Bool { webView != nil }
@@ -288,9 +289,14 @@ extension WebTab: WKNavigationDelegate {
     public func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
         let attachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") ?? false
-        // No drive-by downloads: subframes (e.g. hidden cross-origin iframes) may
-        // never start a download; only the page itself can.
-        if !response.isForMainFrame && (attachment || !response.canShowMIMEType) { return .cancel }
+        // No drive-by downloads: an embedded frame may only start one in a tab that's on
+        // screen, within a minute of the user clicking or typing. Google Docs and Drive run
+        // File → Download in a hidden iframe, and a big export takes a while to generate;
+        // an ad frame nobody touched still can't drop files.
+        if !response.isForMainFrame && (attachment || !response.canShowMIMEType) {
+            let userAsked = webView.window != nil && UserInput.isRecent(60)
+            if !userAsked { return .cancel }
+        }
         if attachment { return .download }
         return response.canShowMIMEType ? .allow : .download
     }
@@ -504,4 +510,22 @@ public enum LoadFailure {
         </main></body></html>
         """
     }
+}
+
+/// When the user last clicked or typed anywhere in the app. Gates downloads started by
+/// embedded frames: allowed just after real input, refused otherwise.
+@MainActor
+enum UserInput {
+    private(set) static var last = Date.distantPast
+    private static var monitor: Any?
+
+    static func startTracking() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { event in
+            last = Date()
+            return event
+        }
+    }
+
+    static func isRecent(_ seconds: TimeInterval) -> Bool { Date().timeIntervalSince(last) < seconds }
 }
