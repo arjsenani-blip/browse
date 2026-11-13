@@ -203,7 +203,7 @@ final class ProxyEngine: @unchecked Sendable {
     static func makePrivacyContext(for resolver: EncryptedDNSProxy.Resolver) -> NWParameters.PrivacyContext? {
         guard let fallback = resolver.resolverConfiguration else { return nil }
         // Each proxy gets its own context, so each profile gets its own DNS cache.
-        let context = NWParameters.PrivacyContext(description: "Aegis encrypted DNS (\(resolver.rawValue))")
+        let context = NWParameters.PrivacyContext(description: "Vane encrypted DNS (\(resolver.rawValue))")
         context.requireEncryptedNameResolution(true, fallbackResolver: fallback)
         context.disableLogging()
         return context

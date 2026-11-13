@@ -70,8 +70,8 @@ extension AppServices {
         guard let id = extensions.storeExtensionID(for: url) else { return }
         let installed = extensions.isInstalled(id)
         CredentialBanner.show(in: frontController?.window, symbol: "puzzlepiece.extension",
-                              text: installed ? "This extension is installed in Aegis." : "Add this extension to Aegis?",
-                              primary: installed ? "Remove" : "Add to Aegis", secondary: "Not Now", timeout: 30,
+                              text: installed ? "This extension is installed in Vane." : "Add this extension to Vane?",
+                              primary: installed ? "Remove" : "Add to Vane", secondary: "Not Now", timeout: 30,
                               primaryAction: { [weak self] in
                                   guard let self else { return }
                                   if installed { Task { try? await self.extensions.uninstall(id: id) } }
@@ -110,7 +110,7 @@ extension AppServices {
         alert.messageText = "Add “\(name)”?"
         var text = request.summary.isEmpty ? "It asks for no special access." : "It will be able to:\n• " + request.summary.joined(separator: "\n• ")
         if !warnings.isEmpty {
-            text += "\n\nNot supported in Aegis (parts of the extension may not work):\n• " + warnings.prefix(6).joined(separator: "\n• ")
+            text += "\n\nNot supported in Vane (parts of the extension may not work):\n• " + warnings.prefix(6).joined(separator: "\n• ")
         }
         alert.informativeText = text
         alert.addButton(withTitle: "Add Extension")

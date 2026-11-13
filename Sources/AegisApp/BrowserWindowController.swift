@@ -134,7 +134,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         window.setFrameAutosaveName("AegisMainWindow")
         window.minSize = NSSize(width: 640, height: 420)
         window.tabbingMode = .disallowed
-        window.title = "Aegis"
+        window.title = "Vane"
         super.init(window: window)
         window.delegate = self
 
@@ -386,7 +386,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             lastSpaceID = space.id
             warmNeighbourSpaces()
         }
-        window?.title = shownSelection.flatMap { store.tabs[$0]?.displayTitle } ?? (isPrivateWindow ? "Private" : "Aegis")
+        window?.title = shownSelection.flatMap { store.tabs[$0]?.displayTitle } ?? (isPrivateWindow ? "Private" : "Vane")
     }
 
     /// After a space switch settles, quietly wake the neighbouring spaces'

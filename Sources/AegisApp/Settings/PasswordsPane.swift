@@ -18,7 +18,7 @@ struct PasswordsPane: View {
     }
 
     var body: some View {
-        SettingsPageHeader(title: "Passwords", subtitle: "Saved in your Mac's Keychain. Aegis offers to fill them on matching sites.")
+        SettingsPageHeader(title: "Passwords", subtitle: "Saved in your Mac's Keychain. Vane offers to fill them on matching sites.")
 
         HStack(spacing: 12) {
             SettingsStat(value: loaded ? "\(credentials.count)" : "…", label: "Saved passwords", systemImage: "key.fill", tint: SettingsPane.passwords.tint)

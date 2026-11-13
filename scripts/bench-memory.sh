@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Launches build/Aegis.app, waits for it to settle, and reports the physical
+# Launches build/Vane.app, waits for it to settle, and reports the physical
 # footprint of the app process and of its WebKit child processes.
 # Usage: scripts/bench-memory.sh [seconds=10]
 set -euo pipefail
@@ -8,7 +8,7 @@ WAIT=${1:-10}
 BUDGET_MB=150
 
 pkill -x Aegis 2>/dev/null || true
-open -n build/Aegis.app
+open -n build/Vane.app
 sleep "$WAIT"
 PID=$(pgrep -x Aegis | head -1)
 [ -z "$PID" ] && { echo "Aegis is not running"; exit 1; }

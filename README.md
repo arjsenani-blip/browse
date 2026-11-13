@@ -1,8 +1,8 @@
-# Aegis
+# Vane
 
 A privacy-first, keyboard-driven browser for macOS in the spirit of Arc: a sidebar of vertical tabs, spaces you swipe between, folders, and a command palette. Native Swift and AppKit on the system WebKit, so it idles at 0% CPU and about 40 MB and feels like a Mac app.
 
-![Aegis with a themed space](docs/design/themed-window-real.png)
+![Vane with a themed space](docs/design/themed-window-real.png)
 
 > This repository previously held a Chromium/Helium-based prototype. It is preserved on the [`helium-archive`](../../tree/helium-archive) branch.
 
@@ -10,10 +10,10 @@ A privacy-first, keyboard-driven browser for macOS in the spirit of Arc: a sideb
 
 ```sh
 swift test                      # ~200 tests
-scripts/bundle.sh release       # → build/Aegis.app as "Aegis Dev" (own data folder)
-scripts/install.sh              # → /Applications/Aegis.app (real identity)
+scripts/bundle.sh release       # → build/Vane.app as "Vane Dev" (own data folder)
+scripts/install.sh              # → /Applications/Vane.app (real identity)
 scripts/bench-memory.sh         # idle footprint vs the 150 MB budget
-scripts/bench-compare.sh        # Aegis vs Chromium (Edge, throwaway profile)
+scripts/bench-compare.sh        # Vane vs Chromium (Edge, throwaway profile)
 ```
 
 Requires macOS 15.4+, Xcode 26+ (Swift 6).
@@ -22,7 +22,7 @@ Requires macOS 15.4+, Xcode 26+ (Swift 6).
 
 Measured with the same 5 sites open (`docs/benchmarks.md`):
 
-| | Aegis | Microsoft Edge |
+| | Vane | Microsoft Edge |
 |---|---|---|
 | Launch to first window | **0.6 s** | 1.0–1.3 s |
 | Total memory, all processes | **666–752 MB** | 1,301–1,335 MB |
@@ -58,12 +58,12 @@ Measured with the same 5 sites open (`docs/benchmarks.md`):
 | Passkeys from iCloud Keychain | ⏳ Needs Apple's entitlement; until then sites are told passkeys are unavailable and fall back to passwords | See below |
 | DNS-over-HTTPS (Quad9 by default; Cloudflare, Mullvad) | ✅ | Connection reports show `dnsProtocol=https`; pages load through the proxy |
 | Import from Arc (spaces, favorites, pinned), Chromium browsers, Safari | ✅ Tested on sample files | Arc isn't installed here, so it hasn't been tried on real Arc data |
-| Chrome Web Store extensions ("Add to Aegis" on store pages, ⌘K → Add Extension) | ✅ MV3 via WebKit | uBlock Origin Lite installed from the store, loaded with no errors, popup works; Dark Reader loads; Bitwarden's background script fails |
+| Chrome Web Store extensions ("Add to Vane" on store pages, ⌘K → Add Extension) | ✅ MV3 via WebKit | uBlock Origin Lite installed from the store, loaded with no errors, popup works; Dark Reader loads; Bitwarden's background script fails |
 
 ## Apple Passwords: what's possible
 
 - **Passkeys (iCloud Keychain):** these work once Apple grants the `com.apple.developer.web-browser.public-key-credential` entitlement. Only the Account Holder of a paid Apple Developer organization can request it, at https://developer.apple.com/contact/request/macos-browsers-passkeys/. After approval, sign with Developer ID plus the provisioning profile, and WebKit handles WebAuthn natively. The Settings window shows the current status.
-- **Saved iCloud Keychain passwords:** Apple offers no API for third-party browsers to read or write them. Chrome and Arc only get them through Apple's extension, which Apple allow-lists per browser. Aegis keeps its own passwords in the macOS Keychain instead, and imports them from the Passwords app (File → Import Passwords).
+- **Saved iCloud Keychain passwords:** Apple offers no API for third-party browsers to read or write them. Chrome and Arc only get them through Apple's extension, which Apple allow-lists per browser. Vane keeps its own passwords in the macOS Keychain instead, and imports them from the Passwords app (File → Import Passwords).
 - **Verification codes from Messages and Mail:** macOS fills these system-wide. This hasn't been checked on a live site yet.
 
 ## How it was built

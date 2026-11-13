@@ -5,7 +5,7 @@ struct AppearancePane: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        SettingsPageHeader(title: "Appearance", subtitle: "How Aegis looks in every window. Changes apply as you make them.")
+        SettingsPageHeader(title: "Appearance", subtitle: "How Vane looks in every window. Changes apply as you make them.")
 
         SettingsCard(title: "Preview", help: "Your current space, drawn with these settings.") {
             BrowserPreview(theme: model.store.currentSpace.resolvedTheme, appearance: model.appearance)
@@ -13,7 +13,7 @@ struct AppearancePane: View {
         }
 
         HStack(alignment: .top, spacing: 16) {
-            SettingsCard(title: "Theme", help: "Follow macOS, or keep Aegis light or dark.", fillHeight: true) {
+            SettingsCard(title: "Theme", help: "Follow macOS, or keep Vane light or dark.", fillHeight: true) {
                 HStack(spacing: 10) {
                     ForEach(AppearanceSettings.Mode.allCases, id: \.self) { mode in
                         SettingsChoiceTile(title: mode.title, selected: model.appearance.mode == mode) {

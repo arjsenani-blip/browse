@@ -7,17 +7,17 @@ enum Menus {
     static func build(target: AppDelegate) -> NSMenu {
         let main = NSMenu()
 
-        main.addItem(submenu("Aegis", [
-            item("About Aegis", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", target: nil),
+        main.addItem(submenu("Vane", [
+            item("About Vane", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", target: nil),
             .separator(),
             item("Settings…", #selector(AppDelegate.showSettings), ",", target: target),
             item("Add Extension…", #selector(AppDelegate.addExtension), "", target: target),
-            item("Make Aegis the Default Browser", #selector(AppDelegate.makeDefaultBrowser), "", target: target),
+            item("Make Vane the Default Browser", #selector(AppDelegate.makeDefaultBrowser), "", target: target),
             .separator(),
-            item("Hide Aegis", #selector(NSApplication.hide(_:)), "h", target: nil),
+            item("Hide Vane", #selector(NSApplication.hide(_:)), "h", target: nil),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option], target: nil),
             .separator(),
-            item("Quit Aegis", #selector(NSApplication.terminate(_:)), "q", target: nil),
+            item("Quit Vane", #selector(NSApplication.terminate(_:)), "q", target: nil),
         ]))
 
         main.addItem(submenu("File", [

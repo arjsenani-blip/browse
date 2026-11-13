@@ -16,7 +16,7 @@ struct PrivacyPane: View {
         let rules = model.services.blocking.ruleCount
         let _ = model.tick
 
-        SettingsPageHeader(title: "Privacy & Security", subtitle: "Aegis sends no telemetry. Everything below runs on this Mac.")
+        SettingsPageHeader(title: "Privacy & Security", subtitle: "Vane sends no telemetry. Everything below runs on this Mac.")
 
         HStack(spacing: 12) {
             SettingsStat(value: rules > 0 ? rules.formatted() : "—", label: "Blocking rules", systemImage: "shield.lefthalf.filled", tint: SettingsPane.privacy.tint)

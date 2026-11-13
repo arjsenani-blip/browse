@@ -472,7 +472,7 @@ public enum LoadFailure {
             return ("Couldn't connect to this site", "The site didn't answer, or the connection was dropped. It may be down, or blocked on this network.")
         case NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateHasUnknownRoot,
              NSURLErrorServerCertificateNotYetValid, NSURLErrorSecureConnectionFailed:
-            return ("This connection isn't secure", "Aegis couldn't verify the site's identity, so it didn't load the page.")
+            return ("This connection isn't secure", "Vane couldn't verify the site's identity, so it didn't load the page.")
         default: return ("This page couldn't load", error.localizedDescription)
         }
     }

@@ -362,7 +362,7 @@ extension AppServices: WebTabDelegate {
             if (crashTimes[id]?.count ?? 0) <= 3 {
                 tab.reload()
             } else {
-                Toast.show("This page keeps crashing, so Aegis stopped reloading it", in: frontController?.window)
+                Toast.show("This page keeps crashing, so Vane stopped reloading it", in: frontController?.window)
                 Task { await runtime.sleep(id) }
             }
         } else {
@@ -377,7 +377,7 @@ extension AppServices: WebTabDelegate {
         guard !passkeyHostsExplained.contains(host), let url = tab.url else { return }
         passkeyHostsExplained.insert(host)
         CredentialBanner.show(in: frontController?.window, symbol: "person.badge.key",
-                              text: "Passkeys aren't available in Aegis yet — use \u{201C}Try another way\u{201D} to sign in with your password.",
+                              text: "Passkeys aren't available in Vane yet — use \u{201C}Try another way\u{201D} to sign in with your password.",
                               primary: "Open in Safari", secondary: "OK", timeout: 25,
                               primaryAction: {
                                   if let safari = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") {

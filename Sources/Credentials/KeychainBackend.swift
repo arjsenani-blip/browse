@@ -112,7 +112,7 @@ final class KeychainBackend: CredentialBackend {
             kSecAttrServer as String: c.host,
             kSecAttrAccount as String: c.username,
             kSecAttrLabel as String: c.host,
-            kSecAttrDescription as String: "Aegis web password",
+            kSecAttrDescription as String: "Vane web password",
             kSecAttrComment as String: json,
         ]
     }

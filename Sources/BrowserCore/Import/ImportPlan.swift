@@ -120,9 +120,9 @@ extension ImportError: LocalizedError {
         switch self {
         case .notFound(let url): "No file at \(url.path)."
         case .needsFullDiskAccess(let url):
-            "Aegis needs Full Disk Access to read \(url.lastPathComponent). Open System Settings → Privacy & Security → Full Disk Access, enable Aegis, then try again."
+            "Vane needs Full Disk Access to read \(url.lastPathComponent). Open System Settings → Privacy & Security → Full Disk Access, enable Vane, then try again."
         case .unreadable(let url, let reason): "Couldn't read \(url.path): \(reason)"
-        case .malformed(let reason): "The file isn't in a format Aegis understands: \(reason)"
+        case .malformed(let reason): "The file isn't in a format Vane understands: \(reason)"
         }
     }
 }

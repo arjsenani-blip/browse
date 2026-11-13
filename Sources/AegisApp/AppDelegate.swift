@@ -64,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard !sources.isEmpty else {
             let alert = NSAlert()
             alert.messageText = "No other browsers found"
-            alert.informativeText = "Aegis looks for Arc, Chrome, Brave, Edge, Vivaldi and Safari data on this Mac."
+            alert.informativeText = "Vane looks for Arc, Chrome, Brave, Edge, Vivaldi and Safari data on this Mac."
             alert.runModal()
             return
         }
@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         Task {
             guard let csv = try? await PasswordCSVExporter.exportAll(from: services.passwords, reason: "export your saved passwords") else { return }
             let panel = NSSavePanel()
-            panel.nameFieldStringValue = "Aegis Passwords.csv"
+            panel.nameFieldStringValue = "Vane Passwords.csv"
             panel.allowedContentTypes = [.commaSeparatedText]
             if panel.runModal() == .OK, let url = panel.url { try? csv.write(to: url, atomically: true, encoding: .utf8) }
         }
@@ -191,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func addExtension() {
         let alert = NSAlert()
         alert.messageText = "Add an extension"
-        alert.informativeText = "Paste a Chrome Web Store link, or open the store and Aegis will offer to add the extension you're viewing."
+        alert.informativeText = "Paste a Chrome Web Store link, or open the store and Vane will offer to add the extension you're viewing."
         let field = NSTextField(string: "")
         field.placeholderString = "https://chromewebstore.google.com/detail/…"
         field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)

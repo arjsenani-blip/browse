@@ -40,7 +40,7 @@ run_aegis() {
   pkill -x Aegis 2>/dev/null; sleep 1
   local before=$(pgrep -f "com.apple.WebKit" | sort)
   local start=$(now_ms)
-  ./build/Aegis.app/Contents/MacOS/Aegis --snapshot "$SCRATCH/a.png" --open "${URLS[@]}" --delay $((SETTLE + 5)) >/dev/null 2>&1 &
+  ./build/Vane.app/Contents/MacOS/Aegis --snapshot "$SCRATCH/a.png" --open "${URLS[@]}" --delay $((SETTLE + 5)) >/dev/null 2>&1 &
   local launch=$(wait_window "Aegis" "$start")
   sleep "$SETTLE"
   local app=$(pgrep -x Aegis | head -1)

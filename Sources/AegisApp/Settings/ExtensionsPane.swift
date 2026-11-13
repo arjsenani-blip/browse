@@ -22,7 +22,7 @@ struct ExtensionsPane: View {
 
         SettingsPageHeader(title: "Extensions", subtitle: "Chrome Web Store extensions, run by WebKit. Manifest V3 only.")
 
-        SettingsCard(title: "Add from Chrome Web Store", help: "Paste an extension's store link, or open the store and click “Add to Aegis”.") {
+        SettingsCard(title: "Add from Chrome Web Store", help: "Paste an extension's store link, or open the store and click “Add to Vane”.") {
             HStack(spacing: 8) {
                 TextField("https://chromewebstore.google.com/detail/…", text: $link)
                     .textFieldStyle(.roundedBorder)

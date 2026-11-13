@@ -22,7 +22,7 @@ struct AboutPane: View {
                     .frame(width: 72, height: 72)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Aegis").font(.system(size: 26, weight: .bold))
+                    Text("Vane").font(.system(size: 26, weight: .bold))
                     Text("Version \(version)").font(.system(size: 12.5)).foregroundStyle(.secondary).textSelection(.enabled)
                     Text("A private, keyboard-driven browser for macOS, on the system WebKit.")
                         .font(.system(size: 12.5)).foregroundStyle(.secondary)
@@ -38,7 +38,7 @@ struct AboutPane: View {
             SettingsStat(value: model.services.blocking.ruleCount.formatted(), label: "Blocking rules", systemImage: "shield.lefthalf.filled", tint: SettingsPane.privacy.tint)
         }
 
-        SettingsCard(title: "What Aegis connects to", help: "The app itself makes only these requests. There is no analytics or crash reporting.") {
+        SettingsCard(title: "What Vane connects to", help: "The app itself makes only these requests. There is no analytics or crash reporting.") {
             connection("Filter list updates", "easylist.to, secure.fanboy.co.uk", "list.bullet.rectangle")
             Divider()
             connection("Encrypted DNS", model.resolver == .off ? "Off: system DNS" : model.resolver.displayName, "lock.shield")
