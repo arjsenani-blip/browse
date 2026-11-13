@@ -131,14 +131,65 @@ public final class DownloadsButton: NSView {
         }
     }
 
-    /// The little "caught it" squash when the flying file arrives.
+    /// The catch when the flying file arrives: a quick squash and overshoot,
+    /// one neon ripple out from the ring, and the arrow ticking down into place.
     public func bump() {
         guard !Tokens.Motion.reduceMotion else { return }
-        let a = CAKeyframeAnimation(keyPath: "transform.scale")
-        a.values = [1, 1.28, 0.92, 1.04, 1]
-        a.keyTimes = [0, 0.25, 0.55, 0.8, 1]
-        a.duration = 0.45
-        stage.add(a, forKey: "bump")
+        let squash = CAKeyframeAnimation(keyPath: "transform")
+        squash.values = [
+            CATransform3DIdentity,
+            CATransform3DMakeScale(0.82, 0.9, 1),
+            CATransform3DMakeScale(1.12, 1.12, 1),
+            CATransform3DIdentity,
+        ].map { NSValue(caTransform3D: $0) }
+        squash.keyTimes = [0, 0.22, 0.6, 1]
+        squash.timingFunctions = [CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.4, 1), CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.4, 1), CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.4, 1)]
+        squash.duration = 0.34
+        stage.add(squash, forKey: "bump")
+
+        // One ring of light, launched from the progress ring's own radius.
+        let d: CGFloat = 17
+        let ripple = CAShapeLayer()
+        ripple.frame = bounds
+        ripple.path = CGPath(ellipseIn: CGRect(x: (bounds.width - d) / 2, y: (bounds.height - d) / 2, width: d, height: d), transform: nil)
+        ripple.fillColor = nil
+        ripple.strokeColor = neon.cgColor
+        ripple.lineWidth = 1.5
+        ripple.shadowColor = neon.cgColor
+        ripple.shadowOffset = .zero
+        ripple.shadowRadius = 4
+        ripple.shadowOpacity = 1
+        ripple.opacity = 0
+        layer?.addSublayer(ripple)
+        let grow = CABasicAnimation(keyPath: "transform.scale")
+        grow.fromValue = 0.75; grow.toValue = 2.1
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.9; fade.toValue = 0
+        let width = CABasicAnimation(keyPath: "lineWidth")
+        width.fromValue = 1.8; width.toValue = 0.6
+        let g = CAAnimationGroup()
+        g.animations = [grow, fade, width]
+        g.duration = 0.46
+        g.beginTime = CACurrentMediaTime() + 0.04
+        g.fillMode = .backwards
+        g.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.7, 0.3, 1)
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { ripple.removeFromSuperlayer() }
+        ripple.add(g, forKey: "ripple")
+        CATransaction.commit()
+
+        // The arrow drops in from above, dips past its rest and settles (layer is y-up).
+        let tick = CAKeyframeAnimation(keyPath: "transform.translation.y")
+        tick.values = [5, -2, 0]
+        tick.keyTimes = [0, 0.45, 1]
+        tick.duration = 0.36
+        tick.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.4, 1)
+        let tickFade = CAKeyframeAnimation(keyPath: "opacity")
+        tickFade.values = [0, 1, 1]
+        tickFade.keyTimes = [0, 0.45, 1]
+        tickFade.duration = 0.36
+        icon.add(tick, forKey: "tick")
+        icon.add(tickFade, forKey: "tickFade")
     }
 
     private func apply(_ m: Mode, animated: Bool) {

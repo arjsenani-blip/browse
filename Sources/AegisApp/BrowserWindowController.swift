@@ -1205,23 +1205,36 @@ extension BrowserWindowController: SidebarDelegate {
         content.addSubview(overlay, positioned: .above, relativeTo: nil)
         guard let rootLayer = overlay.layer else { overlay.removeFromSuperview(); return }
 
-        // The flying file: its icon leaves the middle of the page and arcs into the button.
+        // The flying file: a small neon-lit tile carrying the file's icon. It lifts off
+        // where the click was (or the middle of the page) and shrinks into the button.
         let ext = (item.filename as NSString).pathExtension
         let icon = NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data)
+        let neon = Tokens.neon(from: store.currentSpace.resolvedTheme.bottom)
         let cardFrame = focusCard.convert(focusCard.bounds, to: overlay)
-        let start = CGPoint(x: cardFrame.midX, y: cardFrame.midY)
+        let mouse = overlay.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let start = cardFrame.insetBy(dx: 20, dy: 20).contains(mouse) ? mouse : CGPoint(x: cardFrame.midX, y: cardFrame.midY)
         let target = button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: overlay)
+        let scaleFactor = window.backingScaleFactor
         let flyer = CALayer()
-        flyer.contents = icon
-        flyer.bounds = CGRect(x: 0, y: 0, width: 64, height: 64)
+        flyer.bounds = CGRect(x: 0, y: 0, width: 30, height: 30)
+        flyer.cornerRadius = 8
+        flyer.cornerCurve = .continuous
+        flyer.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 1).cgColor
+        flyer.borderWidth = 1
+        flyer.borderColor = NSColor(white: 1, alpha: 0.14).cgColor
         flyer.position = target
         flyer.zPosition = 1000
-        flyer.shadowColor = Tokens.neon(from: store.currentSpace.resolvedTheme.bottom).cgColor
-        flyer.shadowRadius = 12
-        flyer.shadowOpacity = 0.8
+        flyer.shadowColor = neon.cgColor
+        flyer.shadowRadius = 10
+        flyer.shadowOpacity = 0
         flyer.shadowOffset = .zero
-        flyer.transform = CATransform3DMakeScale(0.22, 0.22, 1)
         flyer.opacity = 0
+        let glyph = CALayer()
+        glyph.contents = icon
+        glyph.contentsScale = scaleFactor
+        glyph.contentsGravity = .resizeAspect
+        glyph.frame = CGRect(x: 6, y: 6, width: 18, height: 18)
+        flyer.addSublayer(glyph)
         rootLayer.addSublayer(flyer)
 
         let path = CGMutablePath()
@@ -1231,22 +1244,35 @@ extension BrowserWindowController: SidebarDelegate {
         path.addQuadCurve(to: target, control: CGPoint(x: target.x + (start.x - target.x) * 0.55, y: lift))
         let move = CAKeyframeAnimation(keyPath: "position")
         move.path = path
-        move.timingFunction = CAMediaTimingFunction(controlPoints: 0.45, 0, 0.2, 1)
+        move.timingFunction = CAMediaTimingFunction(controlPoints: 0.35, 0, 0.2, 1)
+        // Lift (a quick pop), then shrink into the button and fade as it lands.
+        let curve = CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.4, 1)
         let scale = CAKeyframeAnimation(keyPath: "transform.scale")
-        scale.values = [0.4, 1.15, 1, 0.22]
-        scale.keyTimes = [0, 0.18, 0.45, 1]
+        scale.values = [0.6, 1.1, 0.9, 0.5, 0.35]
+        scale.keyTimes = [0, 0.16, 0.6, 0.88, 1]
+        scale.timingFunctions = [curve, .init(name: .easeInEaseOut), .init(name: .easeIn), .init(name: .linear)]
         let fade = CAKeyframeAnimation(keyPath: "opacity")
-        fade.values = [0, 1, 1, 0.9]
-        fade.keyTimes = [0, 0.12, 0.85, 1]
+        fade.values = [0, 1, 1, 0]
+        fade.keyTimes = [0, 0.1, 0.88, 1]
+        // The tile picks up the space's neon as it travels.
+        let glow = CAKeyframeAnimation(keyPath: "shadowOpacity")
+        glow.values = [0, 0.9, 0.9]
+        glow.keyTimes = [0, 0.6, 1]
+        let edge = CAKeyframeAnimation(keyPath: "borderColor")
+        edge.values = [NSColor(white: 1, alpha: 0.14).cgColor, neon.cgColor, neon.cgColor]
+        edge.keyTimes = [0, 0.6, 1]
+        let round = CAKeyframeAnimation(keyPath: "cornerRadius")
+        round.values = [8, 8, 15]
+        round.keyTimes = [0, 0.6, 0.9]
         let group = CAAnimationGroup()
-        group.animations = [move, scale, fade]
-        group.duration = 0.75
+        group.animations = [move, scale, fade, glow, edge, round]
+        group.duration = 0.44
         let t0 = CACurrentMediaTime()
         CATransaction.begin()
         CATransaction.setCompletionBlock { [weak button] in
             overlay.removeFromSuperview()
             button?.bump()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { openList() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { openList() }
         }
         flyer.add(group, forKey: "fly")
         CATransaction.commit()
