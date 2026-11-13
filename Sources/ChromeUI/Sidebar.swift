@@ -252,21 +252,25 @@ public final class SidebarViewController: NSViewController {
             libraryBadge.heightAnchor.constraint(equalToConstant: 12),
             libraryBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 12),
         ])
-        // Arc's layout: library on the left, spaces centred, "+" on the right.
+        // Footer: space switcher and "+" centred together.
         let footer = NSView()
         for v in [libraryButton, spaceMenuHost, newTab] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             footer.addSubview(v)
         }
+        let footerRow = NSLayoutGuide()
+        footer.addLayoutGuide(footerRow)
         NSLayoutConstraint.activate([
             libraryButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
             libraryButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            newTab.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
+            // Spaces and "+" form one row, centred as a group (the library icon is gone).
+            footerRow.leadingAnchor.constraint(equalTo: spaceMenuHost.leadingAnchor),
+            footerRow.trailingAnchor.constraint(equalTo: newTab.trailingAnchor),
+            footerRow.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
+            footerRow.leadingAnchor.constraint(greaterThanOrEqualTo: footer.leadingAnchor),
+            newTab.leadingAnchor.constraint(equalTo: spaceMenuHost.trailingAnchor, constant: 12),
             newTab.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            spaceMenuHost.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
             spaceMenuHost.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            spaceMenuHost.leadingAnchor.constraint(greaterThanOrEqualTo: libraryButton.trailingAnchor, constant: 10),
-            spaceMenuHost.trailingAnchor.constraint(lessThanOrEqualTo: newTab.leadingAnchor, constant: -10),
         ])
         nowPlayingView.onToggle = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarToggleMedia(id) } }
         nowPlayingView.onPiP = { [weak self] in if let id = self?.state.nowPlaying?.tab { self?.delegate?.sidebarPictureInPicture(id) } }
