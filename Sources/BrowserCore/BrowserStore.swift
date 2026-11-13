@@ -69,6 +69,34 @@ public final class BrowserStore {
         return tab.id
     }
 
+    /// Opens a copy of a tab (same URL and title) directly below it: same tier,
+    /// same folder, same space. Returns nil if the tab doesn't exist.
+    @discardableResult
+    public func duplicate(_ id: TabID, select: Bool = true) -> TabID? {
+        guard let source = tabs[id], let owner = space(containing: id) else { return nil }
+        let copy = TabRecord(url: source.url, title: source.title, tier: source.tier)
+        tabs[copy.id] = copy
+        mutateSpace(owner.id) { space in
+            if let fi = space.folders.firstIndex(where: { $0.tabs.contains(id) }) {
+                // Folder tabs also live in the pinned list.
+                let i = space.folders[fi].tabs.firstIndex(of: id)! + 1
+                space.folders[fi].tabs.insert(copy.id, at: i)
+                let p = space.pinned.firstIndex(of: id).map { $0 + 1 } ?? space.pinned.count
+                space.pinned.insert(copy.id, at: p)
+            } else {
+                let list: [TabID]
+                switch source.tier {
+                case .favorite: list = space.favorites
+                case .pinned: list = space.pinned
+                case .today: list = space.today
+                }
+                space.insert(copy.id, tier: source.tier, at: (list.firstIndex(of: id) ?? list.count - 1) + 1)
+            }
+            if select { space.selected = copy.id }
+        }
+        return copy.id
+    }
+
     public func select(_ id: TabID) {
         guard let owner = space(containing: id) else { return }
         currentSpaceID = owner.id

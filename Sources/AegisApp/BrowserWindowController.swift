@@ -1121,6 +1121,16 @@ extension BrowserWindowController: SidebarDelegate {
         scheduleRefresh()
     }
 
+    func duplicateTab(_ id: TabID) {
+        // Prefer the live page's current URL; the record can lag a navigation.
+        let url = runtime.tab(id)?.webView?.url ?? store.tabs[id]?.url
+        guard let copy = store.duplicate(id) else { return }
+        if let url { store.update(copy) { $0.url = url } }
+        runtime.show(copy)
+        if let url { runtime.tab(copy)?.load(url, typed: false) }
+        refresh()
+    }
+
     func sidebarContextMenu(for id: TabID) -> NSMenu? {
         guard let tab = store.tabs[id] else { return nil }
         let menu = NSMenu()
@@ -1135,6 +1145,7 @@ extension BrowserWindowController: SidebarDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(url.absoluteString, forType: .string)
         }
+        item("Duplicate Tab") { [weak self] in self?.duplicateTab(id) }
         item("Put Tab to Sleep") { [weak self] in Task { await self?.runtime.sleep(id) } }
         menu.addItem(.separator())
         let space = store.space(containing: id)
